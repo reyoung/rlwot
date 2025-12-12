@@ -1,0 +1,16 @@
+# Custom configuration for LoRA model generation
+
+# Base model to use for LoRA
+base_model: "microsoft/DialoGPT-medium"
+
+# Target modules to apply LoRA
+target_modules:
+  - "c_attn"
+  - "c_fc"
+  - "c_proj"
+
+# Rank of LoRA
+lora_r: 4
+
+# Directory to save LoRA model
+save_dir: "custom_ckpt"

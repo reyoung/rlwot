@@ -1,0 +1,20 @@
+# Default configuration for LoRA model generation
+
+# Base model to use for LoRA
+base_model: "Qwen/Qwen3-0.6B"
+
+# Target modules to apply LoRA
+target_modules:
+  - "o_proj"
+  - "gate_proj"
+  - "up_proj"
+  - "down_proj"
+  - "q_proj"
+  - "v_proj"
+  - "k_proj"
+
+# Rank of LoRA
+lora_r: 2
+
+# Directory to save the LoRA model
+save_dir: "ckpt"
