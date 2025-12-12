@@ -8,6 +8,7 @@ import typing
 from pathlib import Path
 from typing import Annotated, List, Literal
 
+import datasets
 import httpx
 import pydantic
 import torch
@@ -29,21 +30,28 @@ class StandaloneVLLMClusterConfig(pydantic.BaseModel):
             default=600, description="Timeout in seconds for starting the VLLM server"
         )
     )
-    max_loras: Annotated[int, pydantic.Field(strict=True, gt=0)] = pydantic.Field(
-        default=1, description="Maximum number of LoRA models to generate"
-    )
 
     def as_args(self) -> typing.Generator[str, None, None]:
         yield "--port"
         yield str(self.port)
-        yield "--max-loras"
-        yield str(self.max_loras)
 
 
 ClusterConfig = Annotated[
     typing.Union[StandaloneVLLMClusterConfig],
     pydantic.Field(discriminator="type"),
 ]
+
+
+class TrainConfig(pydantic.BaseModel):
+    seed: int = 42
+    n_epochs: int = 100
+    n_rollouts_per_sample: int = 5
+    n_workers: int = 10
+    concurrency: int = 10
+
+    @property
+    def eval_concurrency(self):
+        return self.concurrency * self.n_workers
 
 
 class Config(pydantic.BaseModel):
@@ -80,6 +88,10 @@ class Config(pydantic.BaseModel):
 
     debug: bool = pydantic.Field(default=True, description="Debug mode")
 
+    train: TrainConfig = pydantic.Field(
+        default=TrainConfig(), description="Training configuration"
+    )
+
     class Config:
         extra = "forbid"  # Forbid extra fields in the config
 
@@ -89,11 +101,12 @@ class Config(pydantic.BaseModel):
 
 
 class Cluster(typing.Protocol):
-    def start(self, model_path: str, lora_r: int) -> None: ...
+    def start(self, model_path: str, lora_r: int, n_workers: int) -> None: ...
 
     def close(self) -> None: ...
 
     async def new_worker(self, states: dict[str, torch.Tensor]) -> "Worker": ...
+
 
 
 class GenerateArgs(pydantic.BaseModel):
@@ -106,6 +119,14 @@ class Worker(typing.Protocol):
 
     async def generate(self, prompt: str, args: GenerateArgs) -> str: ...
 
+
+@contextlib.asynccontextmanager
+async def new_worker(cluster: Cluster, states: dict[str, torch.Tensor]):
+    worker = await cluster.new_worker(cluster, states)
+    try:
+        yield worker
+    finally:
+        await worker.close()
 
 class StandaloneVLLMCluster(Cluster):
     def __init__(self, config: StandaloneVLLMClusterConfig):
@@ -123,6 +144,8 @@ class StandaloneVLLMCluster(Cluster):
             "base",
             "--max-lora-rank",
             str(lora_r),
+            "--max-loras",
+            str(n_workers),
         ]
         args.extend(self._config.as_args())
         logger.info(f"Starting VLLM server with args: {args}")
@@ -180,13 +203,15 @@ class StandaloneVLLMCluster(Cluster):
 
 
 @contextlib.contextmanager
-def connect_cluster(config: ClusterConfig, base_model: str, lora_r: int):
+def connect_cluster(
+    config: ClusterConfig, base_model: str, lora_r: int, n_workers: int
+):
     if isinstance(config, StandaloneVLLMClusterConfig):
         cluster = StandaloneVLLMCluster(config)
     else:
         raise ValueError(f"Unsupported cluster configuration: {config}")
 
-    cluster.start(base_model, lora_r)
+    cluster.start(base_model, lora_r, n_workers)
     try:
         yield cluster
     finally:
@@ -263,14 +288,111 @@ def generate_default_lora_model(config: Config) -> dict[str, torch.Tensor]:
     return res
 
 
+def dataset_to_generator(
+    dataset: datasets.Dataset,
+    n_rollouts_per_sample: int,
+    rank: int,
+    world_size: int,
+) -> typing.Generator[tuple[str, str], None, None]:
+    for sample in dataset:
+        for _ in range(n_rollouts_per_sample):
+            yield sample
+
+async def eval_sample(
+    worker: Worker,
+    sample: tuple[str, str],
+) -> float:
+    pass
+
+async def _producer(
+    data: typing.Generate[tuple[str, str], None, None],
+    job_queue: asyncio.Queue[tuple[str, str] | None],
+    concurrency: int):
+    for sample in data:
+        await job_queue.put(sample)
+
+    for c in range(concurrency):
+        await job_queue.put(None)
+
+async def _consumer(
+    worker: Worker,
+    job_queue: asyncio.Queue[tuple[str, str]|None],
+    result_queue: asyncio.Queue[float| None],
+):
+    while (sample := await job_queue.get()) is not None:
+        score = eval_sample(worker, sample)
+        await result_queue.put(score)
+
+    await result_queue.put(None)
+
+
+async def eval(
+    cluster: Cluster,
+    model: dict[str, torch.Tensor],
+    data: typing.Generate[tuple[str, str], None, None],
+    concurrency: int,
+) -> float:
+    async with new_worker(cluster, model) as worker:
+        tasks = []
+        job_queue = asyncio.Queue(concurrency)
+        result_queue = asyncio.Queue(concurrency)
+
+        tasks.append(asyncio.create_task(_producer(data, job_queue, concurrency)))
+        tasks.append(asyncio.create_task(_consumer(worker, job_queue, result_queue)))
+
+        await asyncio.gather(*tasks)
+
+        sum_scores = 0
+        n_scores = 0
+        while concurrency != 0:
+            score = await result_queue
+            if score is None:
+                concurrency -= 1
+            else:
+                sum_scores += score
+                n_scores += 1
+
+        return sum_scores / n_scores
+
+
+async def train_loop(
+    cluster: Cluster,
+    base_model: dict[str, torch.Tensor],
+    train_dataset: datasets.Dataset,
+    eval_dataset: datasets.Dataset,
+    cfg: TrainConfig,
+):
+    for epoch_id in range(cfg.n_epochs):
+        correct_rate = await eval(
+            cluster,
+            base_model,
+            dataset_to_generator(eval_dataset, n_rollouts_per_sample=1, rank=1, world_size=0,)
+            concurrency=cfg.concurrency,
+        )
+        logger.info(f"Epoch {epoch_id}: Correct rate = {correct_rate:.2%}")
+
+
 def main() -> None:
     """Main entry point for script."""
     config = parse_args()
     logging.basicConfig(level=logging.DEBUG if config.debug else logging.INFO)
     with connect_cluster(
-        config.cluster_config, config.base_model, config.lora_r
+        config.cluster_config,
+        config.base_model,
+        config.lora_r,
+        config.train.n_workers,
     ) as cluster:
         base_model = generate_default_lora_model(config)
+
+        dataset = datasets.load_dataset(
+            "BytedTsinghua-SIA/DAPO-Math-17k", "default"
+        )
+        train_dataset = dataset["train"].select(range(100))
+        eval_dataset = train_dataset
+
+        asyncio.run(
+            train_loop(cluster, base_model, train_dataset, eval_dataset, config.seed)
+        )
 
 
 if __name__ == "__main__":
