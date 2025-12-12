@@ -390,12 +390,11 @@ async def _consumer(
     job_queue: asyncio.Queue[tuple[str, str] | None],
     result_queue: asyncio.Queue[float | None],
 ):
-        while (sample := await job_queue.get()) is not None:
-            score = await eval_sample(worker, sample)
-            await result_queue.put(score)
+    while (sample := await job_queue.get()) is not None:
+        score = await eval_sample(worker, sample)
+        await result_queue.put(score)
 
-        await result_queue.put(None)
-
+    await result_queue.put(None)
 
 
 async def eval(
@@ -412,12 +411,10 @@ async def eval(
         tasks.append(asyncio.create_task(_producer(data, job_queue, concurrency)))
         tasks.append(asyncio.create_task(_consumer(worker, job_queue, result_queue)))
 
-        await asyncio.gather(*tasks)
-
         sum_scores = 0
         n_scores = 0
         while concurrency != 0:
-            score = await result_queue
+            score = await result_queue.get()
             if score is None:
                 concurrency -= 1
             else:
