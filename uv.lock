@@ -2825,6 +2825,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "hf-transfer" },
+    { name = "httpx" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "vllm" },
@@ -2833,6 +2834,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "hf-transfer", specifier = ">=0.1.9" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "vllm", specifier = ">=0.12.0" },

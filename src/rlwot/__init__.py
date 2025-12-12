@@ -1,15 +1,44 @@
 import argparse
+import contextlib
 import logging
 import os
+import subprocess
+import time
+import typing
 from pathlib import Path
-from typing import List, Literal
+from typing import Annotated, List, Literal
 
+import httpx
 import pydantic
 import torch
 import transformers
 import yaml
 
 logger = logging.getLogger(__name__)
+
+
+class StandaloneVLLMClusterConfig(pydantic.BaseModel):
+    port: Annotated[int, pydantic.Field(strict=True, gt=0, lt=65536)] = pydantic.Field(
+        default=58000, description="Port number for the standalone VLLM cluster"
+    )
+    type: Literal["standalone_vllm"] = pydantic.Field(
+        default="standalone_vllm", description="Type of the cluster"
+    )
+    start_timeout_in_sec: Annotated[int, pydantic.Field(strict=True, gt=0)] = (
+        pydantic.Field(
+            default=600, description="Timeout in seconds for starting the VLLM server"
+        )
+    )
+
+    def as_args(self) -> typing.Generator[str, None, None]:
+        yield "--port"
+        yield str(self.port)
+
+
+ClusterConfig = Annotated[
+    typing.Union[StandaloneVLLMClusterConfig],
+    pydantic.Field(discriminator="type"),
+]
 
 
 class Config(pydantic.BaseModel):
@@ -32,12 +61,16 @@ class Config(pydantic.BaseModel):
         description="Target modules to apply LoRA",
     )
 
-    lora_r: pydantic.conint(ge=1, le=64) = pydantic.Field(
-        default=2, description="Rank of LoRA (1-64)"
+    lora_r: Annotated[int, pydantic.Field(strict=True, gt=1)] = pydantic.Field(
+        default=2, description="Rank of LoRA"
     )
 
     save_dir: str = pydantic.Field(
         default="ckpt", description="Directory to save the LoRA model"
+    )
+
+    cluster_config: ClusterConfig = pydantic.Field(
+        default=StandaloneVLLMClusterConfig(), description="Cluster configuration"
     )
 
     class Config:
@@ -46,6 +79,71 @@ class Config(pydantic.BaseModel):
     def model_post_init(self, __context) -> None:
         """Create the save directory if it doesn't exist."""
         os.makedirs(self.save_dir, exist_ok=True)
+
+
+class Cluster(typing.Protocol):
+    def start(self, model_path: str) -> None: ...
+
+    def close(self) -> None: ...
+
+
+class StandaloneVLLMCluster(Cluster):
+    def __init__(self, config: StandaloneVLLMClusterConfig):
+        self._config = config
+        self._vllm_process: subprocess.Popen | None = None
+        self._http_client = httpx.Client()
+
+    def start(self, model_path: str) -> None:
+        args = ["vllm", "serve", model_path]
+        args.extend(self._config.as_args())
+        logger.info(f"Starting VLLM server with args: {args}")
+        self._vllm_process = subprocess.Popen(args)
+
+        # Waiting for the server is started
+        try:
+            self._wait_for_server()
+        except:
+            self._stop(force=True)
+            raise
+
+    def _wait_for_server(self):
+        begin = time.time()
+        while time.time() - begin < self._config.start_timeout_in_sec:
+            try:
+                self._http_client.get(f"http://localhost:{self._config.port}/health")
+                break
+            except httpx.RequestError:
+                time.sleep(0.1)
+        else:
+            raise TimeoutError(
+                f"VLLM server did not start within {self._config.start_timeout_in_sec} seconds"
+            )
+
+    def _stop(self, force=False):
+        if self._vllm_process is not None:
+            if not force:
+                self._vllm_process.terminate()
+            else:
+                self._vllm_process.kill()
+            self._vllm_process.wait()
+            self._vllm_process = None
+
+    def close(self):
+        self._stop()
+
+
+@contextlib.contextmanager
+def connect_cluster(config: ClusterConfig, base_model: str):
+    if isinstance(config, StandaloneVLLMClusterConfig):
+        cluster = StandaloneVLLMCluster(config)
+    else:
+        raise ValueError(f"Unsupported cluster configuration: {config}")
+
+    cluster.start(base_model)
+    try:
+        yield cluster
+    finally:
+        cluster.close()
 
 
 def parse_args() -> Config:
@@ -122,7 +220,8 @@ def main() -> None:
     """Main entry point for script."""
     config = parse_args()
     logging.basicConfig(level=logging.DEBUG)
-    generate_default_lora_model(config)
+    with connect_cluster(config.cluster_config, config.base_model) as cluster:
+        generate_default_lora_model(config)
 
 
 if __name__ == "__main__":
