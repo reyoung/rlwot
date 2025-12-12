@@ -29,10 +29,15 @@ class StandaloneVLLMClusterConfig(pydantic.BaseModel):
             default=600, description="Timeout in seconds for starting the VLLM server"
         )
     )
+    max_loras: Annotated[int, pydantic.Field(strict=True, gt=0)] = pydantic.Field(
+        default=65536, description="Maximum number of LoRA models to generate"
+    )
 
     def as_args(self) -> typing.Generator[str, None, None]:
         yield "--port"
         yield str(self.port)
+        yield "--max-loras"
+        yield str(self.max_loras)
 
 
 ClusterConfig = Annotated[
@@ -94,10 +99,19 @@ class StandaloneVLLMCluster(Cluster):
         self._http_client = httpx.Client()
 
     def start(self, model_path: str) -> None:
-        args = ["vllm", "serve", model_path]
+        args = [
+            "vllm",
+            "serve",
+            model_path,
+            "--enable-lora",
+            "--served-model-name",
+            "base",
+        ]
         args.extend(self._config.as_args())
         logger.info(f"Starting VLLM server with args: {args}")
-        self._vllm_process = subprocess.Popen(args)
+        env = os.environ.copy()
+        env["VLLM_ALLOW_RUNTIME_LORA_UPDATING"] = "True"
+        self._vllm_process = subprocess.Popen(args, env=env)
 
         # Waiting for the server is started
         try:
@@ -118,6 +132,18 @@ class StandaloneVLLMCluster(Cluster):
             raise TimeoutError(
                 f"VLLM server did not start within {self._config.start_timeout_in_sec} seconds"
             )
+
+        # call openai completion API
+        test_prompt = ["Hello world!"]
+        response = self._http_client.post(
+            f"http://127.0.0.1:{self._config.port}/v1/completions",
+            json={
+                "model": "base",
+                "prompt": test_prompt,
+                "max_tokens": 7,
+            },
+        )
+        response.raise_for_status()
 
     def _stop(self, force=False):
         if self._vllm_process is not None:
