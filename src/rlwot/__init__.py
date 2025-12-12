@@ -2,7 +2,7 @@ import argparse
 import logging
 import os
 from pathlib import Path
-from typing import List
+from typing import List, Literal
 
 import pydantic
 import torch
@@ -12,28 +12,43 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
-class LoRAConfig(pydantic.BaseModel):
+class Config(pydantic.BaseModel):
     """Configuration for LoRA model generation."""
 
-    base_model: str = "Qwen/Qwen3-0.6B"
-    target_modules: List[str] = [
-        "o_proj",
-        "gate_proj",
-        "up_proj",
-        "down_proj",
-        "q_proj",
-        "v_proj",
-        "k_proj",
-    ]
-    lora_r: int = 2
-    save_dir: str = "ckpt"
+    base_model: str = pydantic.Field(
+        default="Qwen/Qwen3-0.6B", description="Base model name"
+    )
 
-    def model_post_init(self, __context):
+    target_modules: List[str] = pydantic.Field(
+        default=[
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+            "q_proj",
+            "v_proj",
+            "k_proj",
+        ],
+        description="Target modules to apply LoRA",
+    )
+
+    lora_r: pydantic.conint(ge=1, le=64) = pydantic.Field(
+        default=2, description="Rank of LoRA (1-64)"
+    )
+
+    save_dir: str = pydantic.Field(
+        default="ckpt", description="Directory to save the LoRA model"
+    )
+
+    class Config:
+        extra = "forbid"  # Forbid extra fields in the config
+
+    def model_post_init(self, __context) -> None:
         """Create the save directory if it doesn't exist."""
         os.makedirs(self.save_dir, exist_ok=True)
 
 
-def parse_args() -> LoRAConfig:
+def parse_args() -> Config:
     """Parse command line arguments and load configuration from file."""
     parser = argparse.ArgumentParser(description="Generate LoRA model configuration")
     parser.add_argument(
@@ -50,20 +65,20 @@ def parse_args() -> LoRAConfig:
         with open(config_path, "r") as f:
             config_dict = yaml.safe_load(f)
 
-        return LoRAConfig(**config_dict)
+        return Config(**config_dict)
     else:
-        return LoRAConfig()
+        return Config()
 
 
 def _name_in_target_modules(name: str, targets: List[str]) -> bool:
     return any(target in name for target in targets)
 
 
-def generate_default_lora_model(config: LoRAConfig) -> dict[str, torch.Tensor]:
+def generate_default_lora_model(config: Config) -> dict[str, torch.Tensor]:
     """Generate a default LoRA model configuration.
 
     Args:
-        config: LoRAConfig object containing model parameters
+        config: Config object containing model parameters
 
     Returns:
         Dictionary containing LoRA tensors
@@ -104,7 +119,7 @@ def generate_default_lora_model(config: LoRAConfig) -> dict[str, torch.Tensor]:
 
 
 def main() -> None:
-    """Main entry point for the script."""
+    """Main entry point for script."""
     config = parse_args()
     logging.basicConfig(level=logging.DEBUG)
     generate_default_lora_model(config)

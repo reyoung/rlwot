@@ -1,16 +1,23 @@
 # Custom configuration for LoRA model generation
+# This file uses YAML format and is validated using Pydantic models
 
 # Base model to use for LoRA
+# Must be a valid HuggingFace model identifier
 base_model: "microsoft/DialoGPT-medium"
 
 # Target modules to apply LoRA
+# These are the module names that will have LoRA adapters applied
+# Only weight parameters (.weight) are processed, biases are ignored
 target_modules:
-  - "c_attn"
-  - "c_fc"
-  - "c_proj"
+    - "c_attn"
+    - "c_fc"
+    - "c_proj"
 
 # Rank of LoRA
+# Must be between 1 and 64 (inclusive)
+# Higher values mean more parameters but potentially better performance
 lora_r: 4
 
-# Directory to save LoRA model
+# Directory to save the LoRA model
+# Will be created if it doesn't exist
 save_dir: "custom_ckpt"

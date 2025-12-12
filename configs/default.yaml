@@ -1,20 +1,27 @@
 # Default configuration for LoRA model generation
+# This file uses YAML format and is validated using Pydantic models
 
 # Base model to use for LoRA
+# Must be a valid HuggingFace model identifier
 base_model: "Qwen/Qwen3-0.6B"
 
 # Target modules to apply LoRA
+# These are the module names that will have LoRA adapters applied
+# Only weight parameters (.weight) are processed, biases are ignored
 target_modules:
-  - "o_proj"
-  - "gate_proj"
-  - "up_proj"
-  - "down_proj"
-  - "q_proj"
-  - "v_proj"
-  - "k_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+    - "q_proj"
+    - "v_proj"
+    - "k_proj"
 
 # Rank of LoRA
+# Must be between 1 and 64 (inclusive)
+# Higher values mean more parameters but potentially better performance
 lora_r: 2
 
 # Directory to save the LoRA model
+# Will be created if it doesn't exist
 save_dir: "ckpt"
