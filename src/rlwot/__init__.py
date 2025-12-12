@@ -30,7 +30,7 @@ class StandaloneVLLMClusterConfig(pydantic.BaseModel):
         )
     )
     max_loras: Annotated[int, pydantic.Field(strict=True, gt=0)] = pydantic.Field(
-        default=65536, description="Maximum number of LoRA models to generate"
+        default=1, description="Maximum number of LoRA models to generate"
     )
 
     def as_args(self) -> typing.Generator[str, None, None]:
@@ -67,7 +67,7 @@ class Config(pydantic.BaseModel):
     )
 
     lora_r: Annotated[int, pydantic.Field(strict=True, gt=1)] = pydantic.Field(
-        default=2, description="Rank of LoRA"
+        default=8, description="Rank of LoRA"
     )
 
     save_dir: str = pydantic.Field(
@@ -78,6 +78,8 @@ class Config(pydantic.BaseModel):
         default=StandaloneVLLMClusterConfig(), description="Cluster configuration"
     )
 
+    debug: bool = pydantic.Field(default=True, description="Debug mode")
+
     class Config:
         extra = "forbid"  # Forbid extra fields in the config
 
@@ -87,9 +89,22 @@ class Config(pydantic.BaseModel):
 
 
 class Cluster(typing.Protocol):
-    def start(self, model_path: str) -> None: ...
+    def start(self, model_path: str, lora_r: int) -> None: ...
 
     def close(self) -> None: ...
+
+    async def new_worker(self, states: dict[str, torch.Tensor]) -> "Worker": ...
+
+
+class GenerateArgs(pydantic.BaseModel):
+    recursive: bool = pydantic.Field(default=True)
+    max_tokens: int = pydantic.Field(strict=True, gt=0, default=256)
+
+
+class Worker(typing.Protocol):
+    async def close(self) -> None: ...
+
+    async def generate(self, prompt: str, args: GenerateArgs) -> str: ...
 
 
 class StandaloneVLLMCluster(Cluster):
@@ -98,7 +113,7 @@ class StandaloneVLLMCluster(Cluster):
         self._vllm_process: subprocess.Popen | None = None
         self._http_client = httpx.Client()
 
-    def start(self, model_path: str) -> None:
+    def start(self, model_path: str, lora_r: int) -> None:
         args = [
             "vllm",
             "serve",
@@ -106,6 +121,8 @@ class StandaloneVLLMCluster(Cluster):
             "--enable-lora",
             "--served-model-name",
             "base",
+            "--max-lora-rank",
+            str(lora_r),
         ]
         args.extend(self._config.as_args())
         logger.info(f"Starting VLLM server with args: {args}")
@@ -128,6 +145,9 @@ class StandaloneVLLMCluster(Cluster):
                 break
             except httpx.RequestError:
                 time.sleep(0.1)
+                assert self._vllm_process is not None
+                if self._vllm_process.poll() is not None:
+                    raise RuntimeError("VLLM server failed to start")
         else:
             raise TimeoutError(
                 f"VLLM server did not start within {self._config.start_timeout_in_sec} seconds"
@@ -144,6 +164,7 @@ class StandaloneVLLMCluster(Cluster):
             },
         )
         response.raise_for_status()
+        logger.debug("recv response %s", response.json())
 
     def _stop(self, force=False):
         if self._vllm_process is not None:
@@ -159,13 +180,13 @@ class StandaloneVLLMCluster(Cluster):
 
 
 @contextlib.contextmanager
-def connect_cluster(config: ClusterConfig, base_model: str):
+def connect_cluster(config: ClusterConfig, base_model: str, lora_r: int):
     if isinstance(config, StandaloneVLLMClusterConfig):
         cluster = StandaloneVLLMCluster(config)
     else:
         raise ValueError(f"Unsupported cluster configuration: {config}")
 
-    cluster.start(base_model)
+    cluster.start(base_model, lora_r)
     try:
         yield cluster
     finally:
@@ -245,9 +266,11 @@ def generate_default_lora_model(config: Config) -> dict[str, torch.Tensor]:
 def main() -> None:
     """Main entry point for script."""
     config = parse_args()
-    logging.basicConfig(level=logging.DEBUG)
-    with connect_cluster(config.cluster_config, config.base_model) as cluster:
-        generate_default_lora_model(config)
+    logging.basicConfig(level=logging.DEBUG if config.debug else logging.INFO)
+    with connect_cluster(
+        config.cluster_config, config.base_model, config.lora_r
+    ) as cluster:
+        base_model = generate_default_lora_model(config)
 
 
 if __name__ == "__main__":
