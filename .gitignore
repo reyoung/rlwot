@@ -1,2 +1,4 @@
 *.pyc
 .zed
+ckpt/
+my_ckpt/
