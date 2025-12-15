@@ -11,6 +11,8 @@ from uuid_extensions import uuid7
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Annotated, List, Literal
+import random
+from dataclasses import dataclass
 
 import datasets
 import httpx
@@ -22,7 +24,20 @@ import json
 from .dapo_utils import verify as verify_dapo
 logger = logging.getLogger(__name__)
 
-ChatCompletionMessage = list[dict[str, str]]
+ChatCompletionMessages = list[dict[str, str]]
+class GenerateArgs(pydantic.BaseModel):
+    recursive: bool = pydantic.Field(default=True)
+    max_tokens: int = pydantic.Field(strict=True, gt=0, default=256)
+    seed: int | None = None
+
+@dataclass
+class ChatCompletionRequest:
+    messages: ChatCompletionMessages
+    args: GenerateArgs | None  = None
+
+
+    def transform(self, fn: typing.Callable[[typing.Self], typing.Self]) -> typing.Self:
+        return fn(self)
 
 
 class StandaloneVLLMClusterConfig(pydantic.BaseModel):
@@ -42,11 +57,18 @@ class StandaloneVLLMClusterConfig(pydantic.BaseModel):
     )
     max_model_len: int = 1024 * 6
 
+    dp_size: int = pydantic.Field(
+        default=1, description="Data parallel size"
+    )
+
     def as_args(self) -> typing.Generator[str, None, None]:
         yield "--port"
         yield str(self.port)
         yield "--max-model-len"
         yield str(self.max_model_len)
+        if self.dp_size > 1:
+            yield "--data-parallel-size"
+            yield str(self.dp_size)
 
 
 ClusterConfig = Annotated[
@@ -61,6 +83,7 @@ class TrainConfig(pydantic.BaseModel):
     n_rollouts_per_sample: int = 5
     n_workers: int = 10
     concurrency: int = 10
+    max_concurrent_workers: int = 2
 
     @property
     def eval_concurrency(self):
@@ -99,7 +122,7 @@ class Config(pydantic.BaseModel):
         default=StandaloneVLLMClusterConfig(), description="Cluster configuration"
     )
 
-    debug: bool = pydantic.Field(default=True, description="Debug mode")
+    debug: bool = pydantic.Field(default=False, description="Debug mode")
 
     train: TrainConfig = pydantic.Field(
         default=TrainConfig(), description="Training configuration"
@@ -123,18 +146,12 @@ class Cluster(typing.Protocol):
     async def new_worker(self, states: dict[str, torch.Tensor]) -> "Worker":
         raise NotImplementedError("new_worker is not implemented")
 
-
-class GenerateArgs(pydantic.BaseModel):
-    recursive: bool = pydantic.Field(default=True)
-    max_tokens: int = pydantic.Field(strict=True, gt=0, default=256)
-
-
 class Worker(typing.Protocol):
     async def close(self) -> None: 
         raise NotImplementedError("close is not implemented")
 
 
-    async def chat_completion(self, messages: ChatCompletionMessage, args: GenerateArgs | None = None) -> str:
+    async def chat_completion(self, messages: ChatCompletionMessages, args: GenerateArgs | None = None) -> str:
         raise NotImplementedError("chat_completion is not implemented")
 
 
@@ -195,6 +212,8 @@ class VLLMWorker(Worker):
                 "prompt": prompt + response,
                 "max_tokens": args.max_tokens,
             }
+            if args.seed is not None:
+                request_json["seed"] = args.seed
 
             resp = await self._http_client.post(
                 f"{self._addr}/v1/completions",
@@ -222,10 +241,10 @@ class _ChatTemplate:
         self._tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
         self._pool = pool
 
-    def _apply_chat_template(self, messages: ChatCompletionMessage, add_generation_token=False) -> str:
+    def _apply_chat_template(self, messages: ChatCompletionMessages, add_generation_token=False) -> str:
         return self._tokenizer.apply_chat_template(messages, tokenize=False, add_generation_token=add_generation_token)
     
-    async def apply_chat_template(self, messages: ChatCompletionMessage, add_generation_token=False) -> str:
+    async def apply_chat_template(self, messages: ChatCompletionMessages, add_generation_token=False) -> str:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             self._pool,
@@ -437,31 +456,55 @@ def dataset_to_generator(
     n_rollouts_per_sample: int,
     rank: int,
     world_size: int,
-) -> typing.Generator[tuple[ChatCompletionMessage, str], None, None]:
+) -> typing.Generator[tuple[ChatCompletionRequest, str], None, None]:
     for sample_id, sample in enumerate(dataset):
         if sample_id % world_size != rank:
             continue
         for _ in range(n_rollouts_per_sample):
-            yield sample["prompt"], sample["reward_model"]["ground_truth"] # type: ignore
+            yield ChatCompletionRequest(messages=sample["prompt"]), sample["reward_model"]["ground_truth"] # type: ignore
 
 
 async def eval_sample(
     worker: Worker,
-    sample: tuple[ChatCompletionMessage, str],
+    sample: tuple[ChatCompletionRequest, str],
 ) -> float:
-    prompt, ground_truth = sample
-    response = await worker.chat_completion(prompt)
+    req, ground_truth = sample
+    response = await worker.chat_completion(req.messages, req.args)
     ok, _ = verify_dapo(response, ground_truth)
     return float(ok)
 
+def _attach_default_gen_args(req: ChatCompletionRequest) -> ChatCompletionRequest:
+    if req.args is None:
+        req.args = GenerateArgs()
+    return req
+
+class _FixGenerateSeed:
+    def __init__(self, seed: int) -> None:
+        self._rng = random.Random(seed)
+    
+    def __call__(self, req: ChatCompletionRequest) -> ChatCompletionRequest:
+        next_seed = self._rng.randint(0, 2**32 - 1)
+        assert req.args is not None
+        req.args.seed = next_seed
+        return req
+
 
 async def _producer(
-    data: typing.Generator[tuple[ChatCompletionMessage, str], None, None],
-    job_queue: asyncio.Queue[tuple[ChatCompletionMessage, str] | None],
+    data: typing.Generator[tuple[ChatCompletionRequest, str], None, None],
+    job_queue: asyncio.Queue[tuple[ChatCompletionRequest, str] | None],
     concurrency: int,
+    seed: int | None = None
 ):
+    trms = [_attach_default_gen_args]
+    if seed is not None:
+        trms.append(_FixGenerateSeed(seed))
+
     for sample in data:
-        await job_queue.put(sample)
+        req, ground_truth = sample
+        for trm in trms:
+            req = req.transform(trm)
+
+        await job_queue.put((req, ground_truth))
 
     for c in range(concurrency):
         await job_queue.put(None)
@@ -469,7 +512,7 @@ async def _producer(
 
 async def _consumer(
     worker: Worker,
-    job_queue: asyncio.Queue[tuple[ChatCompletionMessage, str] | None],
+    job_queue: asyncio.Queue[tuple[ChatCompletionRequest, str] | None],
     result_queue: asyncio.Queue[float | None],
 ):
     while (sample := await job_queue.get()) is not None:
@@ -482,14 +525,15 @@ async def _consumer(
 async def eval(
     cluster: Cluster,
     model: dict[str, torch.Tensor],
-    data: typing.Generator[tuple[ChatCompletionMessage, str], None, None],
+    data: typing.Generator[tuple[ChatCompletionRequest, str], None, None],
     concurrency: int,
+    rollout_seed: int | None = None,
 ) -> float:
     async with new_worker(cluster, model) as worker, asyncio.TaskGroup() as tg:
         job_queue = asyncio.Queue(concurrency)
         result_queue = asyncio.Queue(concurrency)
 
-        tg.create_task(_producer(data, job_queue, concurrency))
+        tg.create_task(_producer(data, job_queue, concurrency, seed=rollout_seed))
         for _ in range(concurrency):
             tg.create_task(_consumer(worker, job_queue, result_queue))
 
@@ -505,6 +549,54 @@ async def eval(
 
         return sum_scores / n_scores
 
+class WorkerGradient(typing.NamedTuple):
+    seed: int
+    positive_score: float
+    negative_score: float
+
+def _generate_noise(seed: int, base_model: dict[str, torch.Tensor]):
+    # rng = random.Random(seed)
+    with torch.no_grad():
+        with torch.random.fork_rng(devices=["cpu"]):
+            torch.manual_seed(seed)
+        new_model = {}
+        for k, v in base_model.items():
+            noise = torch.randn_like(v) * 0.001 # Small noise for exploration
+            new_model[k] = noise
+        return new_model
+
+
+async def _calc_worker_gradient(semaphore: asyncio.Semaphore, 
+                                seed: int, 
+                                base_model: dict[str, torch.Tensor], 
+                                cfg: TrainConfig, 
+                                cluster: Cluster,
+                                dataset: typing.Callable[[],typing.Generator[tuple[ChatCompletionRequest, str], None, None]]) -> WorkerGradient:
+    try:
+        noise = _generate_noise(seed, base_model)
+
+        with torch.no_grad():
+            new_model = {k: base_model[k] + noise[k] for k in base_model.keys()}
+
+
+        positive_score = await eval(cluster=cluster, 
+                                model=new_model, 
+                                data=dataset(), 
+                                concurrency=cfg.concurrency, 
+                                rollout_seed=seed)
+        with torch.no_grad():
+            new_model = {k: base_model[k] - noise[k] for k in base_model.keys()}
+        
+        negative_score = await eval(cluster=cluster, 
+                                model=new_model, 
+                                data=dataset(), 
+                                concurrency=cfg.concurrency, 
+                                rollout_seed=seed)
+
+        return WorkerGradient(seed=seed, positive_score=positive_score, negative_score=negative_score)
+    finally:
+        semaphore.release()
+
 
 async def train_loop(
     cluster: Cluster,
@@ -513,21 +605,46 @@ async def train_loop(
     eval_dataset: datasets.Dataset,
     cfg: TrainConfig,
 ):
+    train_dataset = train_dataset.repeat(num_times=cfg.n_rollouts_per_sample)
+    rng = random.Random(cfg.seed)
     for epoch_id in range(cfg.n_epochs):
-        correct_rate = await eval(
-            cluster,
-            base_model,
-            dataset_to_generator(
-                eval_dataset,
-                n_rollouts_per_sample=1,
-                rank=0,
-                world_size=1,
-            ),
-            concurrency=cfg.concurrency,
-        )
-        logger.info(f"Epoch {epoch_id}: Correct rate = {correct_rate:.2%}")
+        train_dataset.shuffle(seed=rng.randint(0, 2**32 - 1))
+        worker_seeds = [rng.randint(0, 2**32 - 1) for _ in range(cfg.n_workers)]
+        
+        async with asyncio.TaskGroup() as tg:
+            worker_grads_tasks = []
+            semaphore = asyncio.Semaphore(cfg.max_concurrent_workers)
 
-        raise NotImplementedError("Training loop is not implemented yet")
+            for worker_id, worker_seed in enumerate(worker_seeds):
+                await semaphore.acquire()
+                worker_grads_tasks.append(
+                    tg.create_task(_calc_worker_gradient(
+                        semaphore,
+                        worker_seed, base_model, cfg, cluster,
+                        lambda: dataset_to_generator(train_dataset, 1, worker_id, cfg.n_workers)
+                    ))
+                )
+            worker_grads = await asyncio.gather(*worker_grads_tasks)
+        
+        positive_scores = sum(wg.positive_score for wg in worker_grads) / len(worker_grads)
+        negative_scores = sum(wg.negative_score for wg in worker_grads) / len(worker_grads)
+        for wg in worker_grads:
+            logger.info(f"Epoch {epoch_id} Worker seed {wg.seed} positive score {wg.positive_score} negative score {wg.negative_score}")
+
+            diff = _generate_noise(wg.seed, base_model)
+            score_diff = wg.positive_score - wg.negative_score
+            with torch.no_grad():
+                for k in base_model.keys():
+                    base_model[k] += diff[k] * (score_diff / 2.0)
+
+        logger.info(f"Epoch {epoch_id} positive score {positive_scores} negative score {negative_scores}")
+        with torch.no_grad():
+            torch.save(base_model, f"./model_{epoch_id}.pt")
+            
+
+def _attach_id(sample: dict) -> dict:
+    sample["id"] = str(uuid7())
+    return sample
 
 async def amain(config: Config):
     logging.basicConfig(level=logging.DEBUG if config.debug else logging.INFO)
@@ -537,7 +654,8 @@ async def amain(config: Config):
         base_model = generate_default_lora_model(config)
 
         dataset: datasets.DatasetDict = datasets.load_dataset("BytedTsinghua-SIA/DAPO-Math-17k", "default") # type: ignore
-        train_dataset:  datasets.Dataset= dataset["train"].select(range(10))
+        train_dataset:  datasets.Dataset = dataset["train"].select(range(100))
+        train_dataset = train_dataset.map(_attach_id)
         eval_dataset = train_dataset
 
         await train_loop(cluster, base_model, train_dataset, eval_dataset, config.train)
