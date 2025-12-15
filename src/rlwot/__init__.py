@@ -122,7 +122,7 @@ class Config(pydantic.BaseModel):
         default=StandaloneVLLMClusterConfig(), description="Cluster configuration"
     )
 
-    debug: bool = pydantic.Field(default=True, description="Debug mode")
+    debug: bool = pydantic.Field(default=False, description="Debug mode")
 
     train: TrainConfig = pydantic.Field(
         default=TrainConfig(), description="Training configuration"
