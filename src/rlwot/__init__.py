@@ -261,6 +261,8 @@ class VLLMCluster(Cluster):
                 time.sleep(0.5)
                 continue
             resp.raise_for_status()
+            break
+        
         test_prompt = ["Hello world!"]
         response = await self._http_client.post(
             f"{addr}/v1/completions",
