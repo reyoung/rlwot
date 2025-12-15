@@ -712,7 +712,7 @@ async def train_loop(
             semaphore = asyncio.Semaphore(cfg.max_concurrent_workers)
 
             for worker_id, worker_seed in enumerate(worker_seeds):
-                logger.info("acquiring semaphore for worker %d", worker_id)
+                logger.info("acquiring semaphore for worker %d, sema counter %d", worker_id, cfg.max_concurrent_workers)
                 await semaphore.acquire()
                 
                 worker_grads_tasks.append(
