@@ -662,6 +662,7 @@ async def _calc_worker_gradient(semaphore: asyncio.Semaphore,
                                 cluster: Cluster,
                                 dataset: typing.Callable[[],typing.Generator[tuple[ChatCompletionRequest, str], None, None]],
                                 pbar: tqdm.tqdm) -> WorkerGradient:
+    logger.info("worker main.")
     try:
         noise = _generate_noise(seed, base_model, sigma=cfg.sigma)
 
