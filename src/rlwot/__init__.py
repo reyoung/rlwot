@@ -196,7 +196,8 @@ class VLLMWorker(Worker):
         self._chat_template = chat_template
 
     async def close(self) -> None:
-        logger.info("unloading lora adapter %s", self._worker_id)
+        import traceback
+        logger.info("unloading lora adapter %s, stack %s", self._worker_id, traceback.format_stack())
         resp = await self._http_client.post(
             f"{self._addr}/v1/unload_lora_adapter",
             json={
