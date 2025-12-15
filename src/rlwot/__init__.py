@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import collections
 import contextlib
 import functools
 import logging
@@ -248,6 +249,7 @@ class VLLMCluster(Cluster):
         self._pool = ThreadPoolExecutor(max_workers=8)
         self._chat_template = _ChatTemplate(self._base_config.base_model, self._pool)
         self._next_addr_idx = 0
+        self._addr_counter = collections.defaultdict(int)
 
 
     async def start(self):
@@ -292,6 +294,9 @@ class VLLMCluster(Cluster):
         
         addr = self._config.addresses[self._next_addr_idx]
         self._next_addr_idx = (self._next_addr_idx + 1) % len(self._config.addresses)
+        self._addr_counter[addr] += 1
+        counter = self._addr_counter[addr]
+        logger.info(f"Assigning new worker {worker_id} to address {addr} (total workers on this addr: {counter})")
     
         resp = await self._http_client.post(
             f"{addr}/v1/load_lora_adapter",
