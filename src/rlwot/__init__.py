@@ -261,17 +261,17 @@ class VLLMCluster(Cluster):
                 time.sleep(0.5)
                 continue
             resp.raise_for_status()
-            test_prompt = ["Hello world!"]
-            response = await self._http_client.post(
-                f"{addr}/v1/completions",
-                json={
+        test_prompt = ["Hello world!"]
+        response = await self._http_client.post(
+            f"{addr}/v1/completions",
+            json={
                     "model": "base",
                     "prompt": test_prompt,
                     "max_tokens": 7,
                 },
-            )
-            response.raise_for_status()
-            logger.debug("recv response %s", response.json())
+        )
+        response.raise_for_status()
+        logger.debug("recv response %s", response.json())
 
     def close(self):
         self._pool.shutdown(wait=True)
