@@ -85,6 +85,7 @@ class TrainConfig(pydantic.BaseModel):
     concurrency: int = 10
     max_concurrent_workers: int = 2
     n_samples: int | None = None
+    sigma: float = 0.2
 
     @property
     def eval_concurrency(self):
@@ -635,14 +636,14 @@ class WorkerGradient(typing.NamedTuple):
     positive_score: float
     negative_score: float
 
-def _generate_noise(seed: int, base_model: dict[str, torch.Tensor]):
+def _generate_noise(seed: int, base_model: dict[str, torch.Tensor], sigma: float):
     # rng = random.Random(seed)
     with torch.no_grad():
         with torch.random.fork_rng(devices=["cpu"]):
             torch.manual_seed(seed)
         new_model = {}
         for k, v in base_model.items():
-            noise = torch.randn_like(v) * 0.001 # Small noise for exploration
+            noise = torch.randn_like(v) * sigma # Small noise for exploration
             new_model[k] = noise
         return new_model
 
@@ -655,7 +656,7 @@ async def _calc_worker_gradient(semaphore: asyncio.Semaphore,
                                 dataset: typing.Callable[[],typing.Generator[tuple[ChatCompletionRequest, str], None, None]],
                                 pbar: tqdm.tqdm) -> WorkerGradient:
     try:
-        noise = _generate_noise(seed, base_model)
+        noise = _generate_noise(seed, base_model, sigma=cfg.sigma)
 
         with torch.no_grad():
             new_model = {k: base_model[k] + noise[k] for k in base_model.keys()}
