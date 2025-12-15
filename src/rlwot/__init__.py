@@ -165,6 +165,9 @@ async def new_worker(cluster: Cluster, states: dict[str, torch.Tensor]):
     worker = await cluster.new_worker(states)
     try:
         yield worker
+    except Exception as e:
+        logger.error(f"Error in worker: {e}")
+        raise
     finally:
         try:
             await worker.close()
