@@ -720,7 +720,7 @@ async def train_loop(
         for wg in worker_grads:
             logger.info(f"Epoch {epoch_id} Worker seed {wg.seed} positive score {wg.positive_score} negative score {wg.negative_score}")
 
-            diff = _generate_noise(wg.seed, base_model)
+            diff = _generate_noise(wg.seed, base_model, sigma=cfg.sigma)
             score_diff = wg.positive_score - wg.negative_score
             with torch.no_grad():
                 update_norms = []
