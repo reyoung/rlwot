@@ -690,7 +690,7 @@ async def train_loop(
     for epoch_id in range(cfg.n_epochs):
         train_dataset.shuffle(seed=rng.randint(0, 2**32 - 1))
         worker_seeds = [rng.randint(0, 2**32 - 1) for _ in range(cfg.n_workers)]
-        pbar = tqdm.tqdm(desc=f"Epoch {epoch_id} Training", total=len(train_dataset))
+        pbar = tqdm.tqdm(desc=f"Epoch {epoch_id} Training", total=len(train_dataset) * 2) # * 2 cause by positive and negative
         
         async with asyncio.TaskGroup() as tg:
             worker_grads_tasks = []
