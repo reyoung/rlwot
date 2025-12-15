@@ -714,6 +714,7 @@ async def train_loop(
             for worker_id, worker_seed in enumerate(worker_seeds):
                 logger.info("acquiring semaphore for worker %d, sema counter %d", worker_id, cfg.max_concurrent_workers)
                 await semaphore.acquire()
+                logger.info("acquired semaphore for worker %d", worker_id)
                 
                 worker_grads_tasks.append(
                     tg.create_task(_calc_worker_gradient(
