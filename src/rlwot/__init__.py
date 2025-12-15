@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import contextlib
+import functools
 import logging
 import os
 import subprocess
@@ -18,8 +19,10 @@ import torch
 import transformers
 import yaml
 import json
-
+from .dapo_utils import verify as verify_dapo
 logger = logging.getLogger(__name__)
+
+ChatCompletionMessage = list[dict[str, str]]
 
 
 class StandaloneVLLMClusterConfig(pydantic.BaseModel):
@@ -37,7 +40,7 @@ class StandaloneVLLMClusterConfig(pydantic.BaseModel):
     lora_dir: str = pydantic.Field(
         default="lora", description="Directory for storing LoRA models"
     )
-    max_model_len: int = 4096
+    max_model_len: int = 1024 * 6
 
     def as_args(self) -> typing.Generator[str, None, None]:
         yield "--port"
@@ -130,8 +133,9 @@ class Worker(typing.Protocol):
     async def close(self) -> None: 
         raise NotImplementedError("close is not implemented")
 
-    async def generate(self, prompt: str, args: GenerateArgs) -> str: 
-        raise NotImplementedError("generate is not implemented")
+
+    async def chat_completion(self, messages: ChatCompletionMessage, args: GenerateArgs | None = None) -> str:
+        raise NotImplementedError("chat_completion is not implemented")
 
 
 @contextlib.asynccontextmanager
@@ -162,12 +166,74 @@ def _save_lora_model(
         torch.save(states, f)
 
 
-class StandaloneVLLMWorker(Worker):
-    def __init__(self, worker_id: str, port: int, client: httpx.AsyncClient):
+class VLLMWorker(Worker):
+    def __init__(self, worker_id: str,  client: httpx.AsyncClient, addr: str, chat_template: "_ChatTemplate") -> None:
         self._worker_id = worker_id
-        self._port = port
         self._http_client = client
+        self._addr = addr
+        self._chat_template = chat_template
+
+    async def close(self) -> None:
+        resp = await self._http_client.post(
+            f"{self._addr}/v1/unload_lora_adapter",
+            json={
+                "lora_name": self._worker_id,
+            }
+        )
+        resp.raise_for_status()
+
+
+    async def chat_completion(self, messages: List[dict[str, str]], args: GenerateArgs | None = None) -> str:
+        if args is None:
+            args = GenerateArgs()
+        prompt: str = await self._chat_template.apply_chat_template(messages, add_generation_token=True)
+        response: str = ""
+
+        while True:
+            request_json = {
+                "model": self._worker_id,
+                "prompt": prompt + response,
+                "max_tokens": args.max_tokens,
+            }
+
+            resp = await self._http_client.post(
+                f"{self._addr}/v1/completions",
+                json=request_json
+            )
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                if resp.status_code / 100 == 4:
+                    # 4xx is client error
+                    logger.info("ignore request vllm error %d: %s", resp.status_code,  resp.text)
+                    return response
+                raise 
+            response_json = resp.json()
+
+            c0 = response_json["choices"][0]
+            response += c0["text"]
+
+            if c0["finish_reason"] != "length":
+                return response
+
     
+class _ChatTemplate:
+    def __init__(self, model_name: str, pool: ThreadPoolExecutor) -> None:
+        self._tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
+        self._pool = pool
+
+    def _apply_chat_template(self, messages: ChatCompletionMessage, add_generation_token=False) -> str:
+        return self._tokenizer.apply_chat_template(messages, tokenize=False, add_generation_token=add_generation_token)
+    
+    async def apply_chat_template(self, messages: ChatCompletionMessage, add_generation_token=False) -> str:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            self._pool,
+            self._apply_chat_template,
+            messages,
+            add_generation_token,
+        )
+
 
 
 class StandaloneVLLMCluster(Cluster):
@@ -175,8 +241,14 @@ class StandaloneVLLMCluster(Cluster):
         self._config = config
         self._base_config = base_cfg
         self._vllm_process: subprocess.Popen | None = None
-        self._http_client = httpx.AsyncClient()
+        self._http_client = httpx.AsyncClient(timeout=httpx.Timeout(read=1800, connect=5, write=5, pool=5))
         self._pool = ThreadPoolExecutor(max_workers=8)
+        self._chat_template = _ChatTemplate(self._base_config.base_model, self._pool)
+        
+    @functools.cached_property
+    def addr(self) -> str:
+        return f"http://127.0.0.1:{self._config.port}"
+
 
     async def start(self):
         args = [
@@ -209,7 +281,7 @@ class StandaloneVLLMCluster(Cluster):
         begin = time.time()
         while time.time() - begin < self._config.start_timeout_in_sec:
             try:
-                await self._http_client.get(f"http://localhost:{self._config.port}/health")
+                await self._http_client.get(f"{self.addr}/health")
                 break
             except httpx.RequestError:
                 time.sleep(0.1)
@@ -224,7 +296,7 @@ class StandaloneVLLMCluster(Cluster):
         # call openai completion API
         test_prompt = ["Hello world!"]
         response = await self._http_client.post(
-            f"http://127.0.0.1:{self._config.port}/v1/completions",
+            f"{self.addr}/v1/completions",
             json={
                 "model": "base",
                 "prompt": test_prompt,
@@ -258,14 +330,19 @@ class StandaloneVLLMCluster(Cluster):
                              self._base_config.target_modules, states)
         
         resp = await self._http_client.post(
-            f"http://127.0.0.1:{self._config.port}/v1/load_lora_adapter",
+            f"{self.addr}/v1/load_lora_adapter",
             json={
                 "lora_name": worker_id,
                 "lora_path": worker_dir,
             }
         )
         resp.raise_for_status()
-        return StandaloneVLLMWorker(worker_id, self._config.port, self._http_client)
+        return VLLMWorker(
+            worker_id=worker_id,
+            client=self._http_client,
+            addr=self.addr,
+            chat_template=self._chat_template,
+        )
 
 
 
@@ -360,22 +437,27 @@ def dataset_to_generator(
     n_rollouts_per_sample: int,
     rank: int,
     world_size: int,
-) -> typing.Generator[tuple[str, str], None, None]:
-    for sample in dataset:
+) -> typing.Generator[tuple[ChatCompletionMessage, str], None, None]:
+    for sample_id, sample in enumerate(dataset):
+        if sample_id % world_size != rank:
+            continue
         for _ in range(n_rollouts_per_sample):
-            yield sample
+            yield sample["prompt"], sample["reward_model"]["ground_truth"] # type: ignore
 
 
 async def eval_sample(
     worker: Worker,
-    sample: tuple[str, str],
+    sample: tuple[ChatCompletionMessage, str],
 ) -> float:
-    pass
+    prompt, ground_truth = sample
+    response = await worker.chat_completion(prompt)
+    ok, _ = verify_dapo(response, ground_truth)
+    return float(ok)
 
 
 async def _producer(
-    data: typing.Generator[tuple[str, str], None, None],
-    job_queue: asyncio.Queue[tuple[str, str] | None],
+    data: typing.Generator[tuple[ChatCompletionMessage, str], None, None],
+    job_queue: asyncio.Queue[tuple[ChatCompletionMessage, str] | None],
     concurrency: int,
 ):
     for sample in data:
@@ -387,7 +469,7 @@ async def _producer(
 
 async def _consumer(
     worker: Worker,
-    job_queue: asyncio.Queue[tuple[str, str] | None],
+    job_queue: asyncio.Queue[tuple[ChatCompletionMessage, str] | None],
     result_queue: asyncio.Queue[float | None],
 ):
     while (sample := await job_queue.get()) is not None:
@@ -400,16 +482,16 @@ async def _consumer(
 async def eval(
     cluster: Cluster,
     model: dict[str, torch.Tensor],
-    data: typing.Generator[tuple[str, str], None, None],
+    data: typing.Generator[tuple[ChatCompletionMessage, str], None, None],
     concurrency: int,
 ) -> float:
-    async with new_worker(cluster, model) as worker:
-        tasks = []
+    async with new_worker(cluster, model) as worker, asyncio.TaskGroup() as tg:
         job_queue = asyncio.Queue(concurrency)
         result_queue = asyncio.Queue(concurrency)
 
-        tasks.append(asyncio.create_task(_producer(data, job_queue, concurrency)))
-        tasks.append(asyncio.create_task(_consumer(worker, job_queue, result_queue)))
+        tg.create_task(_producer(data, job_queue, concurrency))
+        for _ in range(concurrency):
+            tg.create_task(_consumer(worker, job_queue, result_queue))
 
         sum_scores = 0
         n_scores = 0
@@ -438,12 +520,14 @@ async def train_loop(
             dataset_to_generator(
                 eval_dataset,
                 n_rollouts_per_sample=1,
-                rank=1,
-                world_size=0,
+                rank=0,
+                world_size=1,
             ),
             concurrency=cfg.concurrency,
         )
         logger.info(f"Epoch {epoch_id}: Correct rate = {correct_rate:.2%}")
+
+        raise NotImplementedError("Training loop is not implemented yet")
 
 async def amain(config: Config):
     logging.basicConfig(level=logging.DEBUG if config.debug else logging.INFO)
@@ -452,8 +536,8 @@ async def amain(config: Config):
     ) as cluster:
         base_model = generate_default_lora_model(config)
 
-        dataset: datasets.DatasetDict = datasets.load_dataset("BytedTsinghua-SIA/DAPO-Math-17k", "default")
-        train_dataset:  datasets.Dataset= dataset["train"].select(range(100))
+        dataset: datasets.DatasetDict = datasets.load_dataset("BytedTsinghua-SIA/DAPO-Math-17k", "default") # type: ignore
+        train_dataset:  datasets.Dataset= dataset["train"].select(range(10))
         eval_dataset = train_dataset
 
         await train_loop(cluster, base_model, train_dataset, eval_dataset, config.train)
