@@ -8,7 +8,7 @@ do
         --enable-lora --served-model-name base \
         --max-lora-rank 8 --max-loras 10 \
         --uvicorn-log-level error \
-        --port 5810$i --max-model-len 8192 &
+        --port 5820$i --max-model-len 8192 &
     pids+=($!)
 done
 
