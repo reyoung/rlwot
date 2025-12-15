@@ -1,11 +1,12 @@
 #!/bin/bash
 
 pids=()
-
+export VLLM_ALLOW_RUNTIME_LORA_UPDATING=True
 for i in {0..3}
 do
     CUDA_VISIBLE_DEVICES=$i vllm serve Qwen/Qwen3-4B-Instruct-2507 \
-        --enable-lora --served-model-name base \
+        --enable-lora \
+        --served-model-name base \
         --max-lora-rank 8 --max-loras 10 \
         --uvicorn-log-level error \
         --port 5820$i --max-model-len 8192 &

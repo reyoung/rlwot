@@ -262,7 +262,7 @@ class VLLMCluster(Cluster):
                 continue
             resp.raise_for_status()
             break
-        
+
         test_prompt = ["Hello world!"]
         response = await self._http_client.post(
             f"{addr}/v1/completions",
@@ -287,7 +287,6 @@ class VLLMCluster(Cluster):
         await loop.run_in_executor(self._pool, _save_lora_model, worker_dir, self._base_config.lora_r, 
                              self._base_config.target_modules, states)
         
-        # Randomly pick a server
         addr = self._config.addresses[self._next_addr_idx]
         self._next_addr_idx = (self._next_addr_idx + 1) % len(self._config.addresses)
     
