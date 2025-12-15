@@ -528,16 +528,18 @@ def generate_default_lora_model(config: Config) -> dict[str, torch.Tensor]:
 
 
 def dataset_to_generator(
-    dataset: datasets.Dataset,
-    n_rollouts_per_sample: int,
-    rank: int,
+    dataset: datasets.Dataset,    rank: int,
     world_size: int,
 ) -> typing.Generator[tuple[ChatCompletionRequest, str], None, None]:
-    for sample_id, sample in enumerate(dataset):
-        if sample_id % world_size != rank:
-            continue
-        for _ in range(n_rollouts_per_sample):
-            yield ChatCompletionRequest(messages=sample["prompt"]), sample["reward_model"]["ground_truth"] # type: ignore
+    # Use proper data sharding to ensure equal distribution
+    total_samples = len(dataset)
+    chunk_size = total_samples // world_size
+    start_idx = rank * chunk_size
+    end_idx = start_idx + chunk_size if rank < world_size - 1 else total_samples
+    
+    for sample_id in range(start_idx, end_idx):
+        sample = dataset[sample_id]
+        yield ChatCompletionRequest(messages=sample["prompt"]), sample["reward_model"]["ground_truth"] # type: ignore
 
 
 async def eval_sample(
@@ -690,6 +692,7 @@ async def train_loop(
     rng = random.Random(cfg.seed)
     for epoch_id in range(cfg.n_epochs):
         train_dataset.shuffle(seed=rng.randint(0, 2**32 - 1))
+        # train_dataset.
         worker_seeds = [rng.randint(0, 2**32 - 1) for _ in range(cfg.n_workers)]
         pbar = tqdm.tqdm(desc=f"Epoch {epoch_id} Training", total=len(train_dataset) * 2) # * 2 cause by positive and negative
         
@@ -703,7 +706,7 @@ async def train_loop(
                     tg.create_task(_calc_worker_gradient(
                         semaphore,
                         worker_seed, base_model, cfg, cluster,
-                        lambda: dataset_to_generator(train_dataset, 1, worker_id, cfg.n_workers),
+                        lambda: dataset_to_generator(train_dataset, worker_id, cfg.n_workers),
                         pbar
                     ))
                 )
