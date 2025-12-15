@@ -528,7 +528,8 @@ def generate_default_lora_model(config: Config) -> dict[str, torch.Tensor]:
 
 
 def dataset_to_generator(
-    dataset: datasets.Dataset,    rank: int,
+    dataset: datasets.Dataset,
+    rank: int,
     world_size: int,
 ) -> typing.Generator[tuple[ChatCompletionRequest, str], None, None]:
     # Use proper data sharding to ensure equal distribution
@@ -620,10 +621,10 @@ async def eval(
         n_scores = 0
         while concurrency != 0:
             score = await result_queue.get()
-            pbar.update(1) if pbar is not None else None
             if score is None:
                 concurrency -= 1
             else:
+                pbar.update(1) if pbar is not None else None
                 sum_scores += score
                 n_scores += 1
 
@@ -702,6 +703,7 @@ async def train_loop(
 
             for worker_id, worker_seed in enumerate(worker_seeds):
                 await semaphore.acquire()
+                
                 worker_grads_tasks.append(
                     tg.create_task(_calc_worker_gradient(
                         semaphore,
