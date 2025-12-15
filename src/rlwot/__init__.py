@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import time
+import traceback
 import typing
 from uuid_extensions import uuid7
 from concurrent.futures import ThreadPoolExecutor
@@ -765,11 +766,20 @@ async def amain(config: Config):
 
         await train_loop(cluster, base_model, train_dataset, eval_dataset, config.train)
         
-
+def handle_exception(loop, context):
+    exc = context.get("exception")
+    if exc:
+        print("Unhandled exception:", exc)
+        traceback.print_exception(type(exc), exc, exc.__traceback__)
+    else:
+        print("Unhandled error:", context.get("message"))
+        
 def main() -> None:
     """Main entry point for script."""
     config = parse_args()
-    asyncio.run(amain(config))
+    loop = asyncio.get_event_loop()
+    loop.set_exception_handler(handle_exception)
+    loop.run_until_complete(amain(config))
     
 
 
