@@ -96,7 +96,7 @@ class Config(pydantic.BaseModel):
     """Configuration for LoRA model generation."""
 
     base_model: str = pydantic.Field(
-        default="Qwen/Qwen3-4B-Instruct-2507", description="Base model name"
+        default="Qwen/Qwen3-4B", description="Base model name"
     )
 
     target_modules: List[str] = pydantic.Field(
