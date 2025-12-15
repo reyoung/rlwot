@@ -661,8 +661,9 @@ async def _calc_worker_gradient(semaphore: asyncio.Semaphore,
                                 cfg: TrainConfig, 
                                 cluster: Cluster,
                                 dataset: typing.Callable[[],typing.Generator[tuple[ChatCompletionRequest, str], None, None]],
-                                pbar: tqdm.tqdm) -> WorkerGradient:
-    logger.info("worker main.")
+                                pbar: tqdm.tqdm,
+                                worker_id: int) -> WorkerGradient:
+    logger.info("worker main %d", worker_id)
     try:
         noise = _generate_noise(seed, base_model, sigma=cfg.sigma)
 
@@ -722,7 +723,8 @@ async def train_loop(
                         semaphore,
                         worker_seed, base_model, cfg, cluster,
                         lambda: dataset_to_generator(train_dataset, worker_id, cfg.n_workers),
-                        pbar
+                        pbar,
+                        worker_id
                     ))
                 )
             worker_grads = await asyncio.gather(*worker_grads_tasks)
