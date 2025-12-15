@@ -5,6 +5,7 @@ import functools
 import logging
 import os
 import subprocess
+import sys
 import time
 import typing
 from uuid_extensions import uuid7
@@ -242,7 +243,8 @@ class VLLMCluster(Cluster):
     def __init__(self, config: VLLMClusterConfig, base_cfg: Config):
         self._config = config
         self._base_config = base_cfg
-        self._http_client = httpx.AsyncClient(timeout=httpx.Timeout(read=1800, connect=5, write=5, pool=5))
+        self._http_client = httpx.AsyncClient(timeout=httpx.Timeout(read=1800, connect=5, write=5, pool=5),
+                                              limits=httpx.Limits(max_connections=sys.maxsize, max_keepalive_connections=sys.maxsize))
         self._pool = ThreadPoolExecutor(max_workers=8)
         self._chat_template = _ChatTemplate(self._base_config.base_model, self._pool)
         self._next_addr_idx = 0
