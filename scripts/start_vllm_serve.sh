@@ -4,7 +4,7 @@ pids=()
 
 for i in {0..3}
 do
-    vllm serve Qwen/Qwen3-4B-Instruct-2507 \
+    CUDA_VISIBLE_DEVICES=$i vllm serve Qwen/Qwen3-4B-Instruct-2507 \
         --enable-lora --served-model-name base \
         --max-lora-rank 8 --max-loras 10 \
         --uvicorn-log-level error \
