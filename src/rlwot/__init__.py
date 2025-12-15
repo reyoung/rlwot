@@ -285,6 +285,8 @@ class StandaloneVLLMCluster(Cluster):
             str(self._base_config.train.n_workers),
             "--uvicorn-log-level",
             "error",
+            "--speculative-config",
+            json.dumps({"method": "ngram", "num_speculative_tokens": 5, "prompt_lookup_max": 4})
         ]
         args.extend(self._config.as_args())
         logger.info(f"Starting VLLM server with args: {args}")
@@ -619,7 +621,7 @@ async def train_loop(
     for epoch_id in range(cfg.n_epochs):
         train_dataset.shuffle(seed=rng.randint(0, 2**32 - 1))
         worker_seeds = [rng.randint(0, 2**32 - 1) for _ in range(cfg.n_workers)]
-        pbar = tqdm.tqdm(desc="Epoch {epoch_id} Training", total=len(train_dataset))
+        pbar = tqdm.tqdm(desc=f"Epoch {epoch_id} Training", total=len(train_dataset))
         
         async with asyncio.TaskGroup() as tg:
             worker_grads_tasks = []
