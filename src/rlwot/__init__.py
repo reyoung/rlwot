@@ -58,22 +58,21 @@ class StandaloneVLLMClusterConfig(pydantic.BaseModel):
     )
     max_model_len: int = 1024 * 6
 
-    dp_size: int = pydantic.Field(
-        default=1, description="Data parallel size"
-    )
-
     def as_args(self) -> typing.Generator[str, None, None]:
         yield "--port"
         yield str(self.port)
         yield "--max-model-len"
         yield str(self.max_model_len)
-        if self.dp_size > 1:
-            yield "--data-parallel-size"
-            yield str(self.dp_size)
 
+class VLLMClusterConfig(pydantic.BaseModel):
+    addresses: list[str] = pydantic.Field([], description="Addresses of VLLM servers")
+    type: Literal["vllm"] = pydantic.Field(default="vllm", description="Type of the cluster")
+    lora_dir: str = pydantic.Field(
+        default="lora", description="Directory for storing LoRA models"
+    )
 
 ClusterConfig = Annotated[
-    typing.Union[StandaloneVLLMClusterConfig],
+    typing.Union[StandaloneVLLMClusterConfig, VLLMClusterConfig],
     pydantic.Field(discriminator="type"),
 ]
 
@@ -237,7 +236,75 @@ class VLLMWorker(Worker):
             if c0["finish_reason"] != "length":
                 return response
 
+
+class VLLMCluster(Cluster):
+    def __init__(self, config: VLLMClusterConfig, base_cfg: Config):
+        self._config = config
+        self._base_config = base_cfg
+        self._http_client = httpx.AsyncClient(timeout=httpx.Timeout(read=1800, connect=5, write=5, pool=5))
+        self._pool = ThreadPoolExecutor(max_workers=8)
+        self._chat_template = _ChatTemplate(self._base_config.base_model, self._pool)
+        self._next_addr_idx = 0
+
+
+    async def start(self):
+        async with asyncio.TaskGroup() as tg:
+            tasks = [tg.create_task(self._health_check(addr)) for addr in self._config.addresses]
+            await asyncio.gather(*tasks)
     
+    async def _health_check(self, addr: str):
+        begin = time.time()
+        while time.time() - begin < 60:
+            try:
+                resp = await self._http_client.get(f"{addr}/health")
+            except httpx.RequestError:
+                time.sleep(0.5)
+                continue
+            resp.raise_for_status()
+            test_prompt = ["Hello world!"]
+            response = await self._http_client.post(
+                f"{addr}/v1/completions",
+                json={
+                    "model": "base",
+                    "prompt": test_prompt,
+                    "max_tokens": 7,
+                },
+            )
+            response.raise_for_status()
+            logger.debug("recv response %s", response.json())
+
+    def close(self):
+        self._pool.shutdown(wait=True)
+
+    async def new_worker(self, states: dict[str, torch.Tensor]) -> "Worker":
+        worker_id = str(uuid7())
+        worker_dir = os.path.join(self._config.lora_dir, worker_id)
+        os.makedirs(worker_dir, exist_ok=True)
+
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(self._pool, _save_lora_model, worker_dir, self._base_config.lora_r, 
+                             self._base_config.target_modules, states)
+        
+        # Randomly pick a server
+        addr = self._config.addresses[self._next_addr_idx]
+        self._next_addr_idx = (self._next_addr_idx + 1) % len(self._config.addresses)
+    
+        resp = await self._http_client.post(
+            f"{addr}/v1/load_lora_adapter",
+            json={
+                "lora_name": worker_id,
+                "lora_path": worker_dir,
+            }
+        )
+        resp.raise_for_status()
+        return VLLMWorker(
+            worker_id=worker_id,
+            client=self._http_client,
+            addr=addr,
+            chat_template=self._chat_template,
+        )
+
+
 class _ChatTemplate:
     def __init__(self, model_name: str, pool: ThreadPoolExecutor) -> None:
         self._tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
@@ -285,8 +352,8 @@ class StandaloneVLLMCluster(Cluster):
             str(self._base_config.train.n_workers),
             "--uvicorn-log-level",
             "error",
-            "--speculative-config",
-            json.dumps({"method": "ngram", "num_speculative_tokens": 5, "prompt_lookup_max": 4})
+            # "--speculative-config",
+            # json.dumps({"method": "ngram", "num_speculative_tokens": 5, "prompt_lookup_max": 4})
         ]
         args.extend(self._config.as_args())
         logger.info(f"Starting VLLM server with args: {args}")
@@ -377,6 +444,8 @@ async def connect_cluster(
 ):
     if isinstance(config.cluster_config, StandaloneVLLMClusterConfig):
         cluster = StandaloneVLLMCluster(config.cluster_config, config)
+    elif isinstance(config.cluster_config, VLLMClusterConfig):
+        cluster = VLLMCluster(config.cluster_config, config)
     else:
         raise ValueError(f"Unsupported cluster configuration: {config}")
 
