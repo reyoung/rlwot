@@ -200,7 +200,7 @@ class VLLMWorker(Worker):
 
     async def close(self) -> None:
         import traceback
-        logger.info("unloading lora adapter %s, stack %s", self._worker_id, traceback.format_stack())
+        logger.info("unloading lora adapter %s, stack %s", self._worker_id, "\n".join(traceback.format_stack()))
         resp = await self._http_client.post(
             f"{self._addr}/v1/unload_lora_adapter",
             json={
