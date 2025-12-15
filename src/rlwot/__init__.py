@@ -680,7 +680,9 @@ async def _calc_worker_gradient(semaphore: asyncio.Semaphore,
                                 rollout_seed=seed,
                                 pbar=pbar)
 
-        return WorkerGradient(seed=seed, positive_score=positive_score, negative_score=negative_score)
+        wg = WorkerGradient(seed=seed, positive_score=positive_score, negative_score=negative_score)
+        logger.info(f"Worker seed {seed} positive score {positive_score} negative score {negative_score}")
+        return wg
     finally:
         semaphore.release()
 
