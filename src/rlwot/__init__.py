@@ -282,6 +282,8 @@ class StandaloneVLLMCluster(Cluster):
             str(self._base_config.lora_r),
             "--max-loras",
             str(self._base_config.train.n_workers),
+            "--uvicorn-log-level",
+            "error",
         ]
         args.extend(self._config.as_args())
         logger.info(f"Starting VLLM server with args: {args}")
@@ -645,6 +647,7 @@ async def train_loop(
 
 async def amain(config: Config):
     logging.basicConfig(level=logging.DEBUG if config.debug else logging.INFO)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     async with connect_cluster(
         config
     ) as cluster:
