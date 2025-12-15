@@ -15,6 +15,7 @@ dependencies = [
     "httpx>=0.28.1",
     "datasets>=4.4.1",
     "uuid7>=0.1.0",
+    "tqdm>=4.67.1",
 ]
 
 [project.scripts]

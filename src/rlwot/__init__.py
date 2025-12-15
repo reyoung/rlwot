@@ -21,6 +21,7 @@ import torch
 import transformers
 import yaml
 import json
+import tqdm
 from .dapo_utils import verify as verify_dapo
 logger = logging.getLogger(__name__)
 
@@ -531,6 +532,7 @@ async def eval(
     data: typing.Generator[tuple[ChatCompletionRequest, str], None, None],
     concurrency: int,
     rollout_seed: int | None = None,
+    pbar: tqdm.tqdm | None = None,
 ) -> float:
     async with new_worker(cluster, model) as worker, asyncio.TaskGroup() as tg:
         job_queue = asyncio.Queue(concurrency)
@@ -544,6 +546,7 @@ async def eval(
         n_scores = 0
         while concurrency != 0:
             score = await result_queue.get()
+            pbar.update(1) if pbar is not None else None
             if score is None:
                 concurrency -= 1
             else:
@@ -574,7 +577,8 @@ async def _calc_worker_gradient(semaphore: asyncio.Semaphore,
                                 base_model: dict[str, torch.Tensor], 
                                 cfg: TrainConfig, 
                                 cluster: Cluster,
-                                dataset: typing.Callable[[],typing.Generator[tuple[ChatCompletionRequest, str], None, None]]) -> WorkerGradient:
+                                dataset: typing.Callable[[],typing.Generator[tuple[ChatCompletionRequest, str], None, None]],
+                                pbar: tqdm.tqdm) -> WorkerGradient:
     try:
         noise = _generate_noise(seed, base_model)
 
@@ -586,7 +590,8 @@ async def _calc_worker_gradient(semaphore: asyncio.Semaphore,
                                 model=new_model, 
                                 data=dataset(), 
                                 concurrency=cfg.concurrency, 
-                                rollout_seed=seed)
+                                rollout_seed=seed,
+                                pbar=pbar)
         with torch.no_grad():
             new_model = {k: base_model[k] - noise[k] for k in base_model.keys()}
         
@@ -594,7 +599,8 @@ async def _calc_worker_gradient(semaphore: asyncio.Semaphore,
                                 model=new_model, 
                                 data=dataset(), 
                                 concurrency=cfg.concurrency, 
-                                rollout_seed=seed)
+                                rollout_seed=seed,
+                                pbar=pbar)
 
         return WorkerGradient(seed=seed, positive_score=positive_score, negative_score=negative_score)
     finally:
@@ -613,6 +619,7 @@ async def train_loop(
     for epoch_id in range(cfg.n_epochs):
         train_dataset.shuffle(seed=rng.randint(0, 2**32 - 1))
         worker_seeds = [rng.randint(0, 2**32 - 1) for _ in range(cfg.n_workers)]
+        pbar = tqdm.tqdm(desc="Epoch {epoch_id} Training", total=len(train_dataset))
         
         async with asyncio.TaskGroup() as tg:
             worker_grads_tasks = []
@@ -624,7 +631,8 @@ async def train_loop(
                     tg.create_task(_calc_worker_gradient(
                         semaphore,
                         worker_seed, base_model, cfg, cluster,
-                        lambda: dataset_to_generator(train_dataset, 1, worker_id, cfg.n_workers)
+                        lambda: dataset_to_generator(train_dataset, 1, worker_id, cfg.n_workers),
+                        pbar
                     ))
                 )
             worker_grads = await asyncio.gather(*worker_grads_tasks)
