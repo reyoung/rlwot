@@ -84,6 +84,7 @@ class TrainConfig(pydantic.BaseModel):
     n_workers: int = 10
     concurrency: int = 10
     max_concurrent_workers: int = 2
+    n_samples: int | None = None
 
     @property
     def eval_concurrency(self):
@@ -642,10 +643,6 @@ async def train_loop(
             torch.save(base_model, f"./model_{epoch_id}.pt")
             
 
-def _attach_id(sample: dict) -> dict:
-    sample["id"] = str(uuid7())
-    return sample
-
 async def amain(config: Config):
     logging.basicConfig(level=logging.DEBUG if config.debug else logging.INFO)
     async with connect_cluster(
@@ -654,8 +651,9 @@ async def amain(config: Config):
         base_model = generate_default_lora_model(config)
 
         dataset: datasets.DatasetDict = datasets.load_dataset("BytedTsinghua-SIA/DAPO-Math-17k", "default") # type: ignore
-        train_dataset:  datasets.Dataset = dataset["train"].select(range(100))
-        train_dataset = train_dataset.map(_attach_id)
+        train_dataset:  datasets.Dataset = dataset["train"]
+        if config.train.n_samples is not None:
+            train_dataset = train_dataset.select(range(config.train.n_samples))
         eval_dataset = train_dataset
 
         await train_loop(cluster, base_model, train_dataset, eval_dataset, config.train)
