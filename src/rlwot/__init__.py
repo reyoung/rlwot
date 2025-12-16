@@ -95,8 +95,8 @@ def generate_default_lora_model(config: Config) -> dict[str, torch.Tensor]:
         lora_a = torch.zeros((rows, config.lora_r), dtype=torch.bfloat16)
         lora_b = torch.zeros((config.lora_r, cols), dtype=torch.bfloat16)
 
-        res[f"base.{prefix}.lora_A.weight"] = lora_a
-        res[f"base.{prefix}.lora_B.weight"] = lora_b
+        res[f"{prefix}.lora_A.weight"] = lora_a
+        res[f"{prefix}.lora_B.weight"] = lora_b
 
     # Save the LoRA tensors to the specified directory
     save_path = os.path.join(config.save_dir, "lora_tensors.pt")
