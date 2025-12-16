@@ -81,8 +81,8 @@ def generate_default_lora_model(config: Config) -> dict[str, torch.Tensor]:
         # base_model.model.model.layers.0.mlp.down_proj.lora_A.weight
         prefix = name[: -len(".weight")]
 
-        lora_b = torch.zeros((rows, config.lora_r), dtype=torch.bfloat16)
         lora_a = torch.zeros((config.lora_r, cols), dtype=torch.bfloat16)
+        lora_b = torch.zeros((rows, config.lora_r), dtype=torch.bfloat16)
 
         res[f"{prefix}.lora_A.weight"] = lora_a
         res[f"{prefix}.lora_B.weight"] = lora_b
@@ -316,8 +316,8 @@ def extract_lora_weights(mat: torch.Tensor, rank: int) -> tuple[torch.Tensor, to
     # A = U_r @ sqrt(S_r), B = sqrt(S_r) @ Vt_r
     sqrt_S_r = torch.sqrt(S_r)
     
-    lora_B = U_r * sqrt_S_r.unsqueeze(0)  # (m, rank)
     lora_A = sqrt_S_r.unsqueeze(1) * Vt_r  # (rank, n)
+    lora_B = U_r * sqrt_S_r.unsqueeze(0)  # (m, rank)
     
     return lora_A, lora_B
 
@@ -368,8 +368,8 @@ async def train_loop(
                 logger.info("updating weight %s", weight_name)
                 origin_a = base_model[f"{weight_name}.lora_A.weight"]
                 origin_b = base_model[f"{weight_name}.lora_B.weight"]
-                m, k = origin_a.shape
-                _, n = origin_b.shape
+                k, n = origin_a.shape
+                m, k = origin_b.shape
                 update = torch.zeros((m, n))
                 for wg in worker_grads:
                     noise_a, noise_b = _generate_lora_noise(wg.seed + offset, m, n, k, cfg.sigma)
@@ -386,7 +386,7 @@ async def train_loop(
                 base_model[f"{weight_name}.lora_A.weight"] += lora_a_update
                 base_model[f"{weight_name}.lora_B.weight"] += lora_b_update
 
-                abs_error = torch.mean(torch.abs(update - lora_a_update @ lora_b_update))
+                abs_error = torch.mean(torch.abs(update -  lora_b_update@lora_a_update))
                 logger.info(f"Weight {weight_name} abs error {abs_error}")
 
 
