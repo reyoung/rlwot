@@ -94,6 +94,10 @@ class TrainConfig(pydantic.BaseModel):
     def eval_concurrency(self):
         return self.concurrency * self.n_workers
 
+class HTTPConfig(pydantic.BaseModel):
+    retry_limit: int = pydantic.Field(default=3, description="Retry limit")
+    retry_backoff: float = pydantic.Field(default=0.5, description="Retry backoff factor")
+    retry_jitter: float = pydantic.Field(default=0.1, description="Retry jitter")
 
 class Config(pydantic.BaseModel):
     """Configuration for LoRA model generation."""
@@ -132,6 +136,8 @@ class Config(pydantic.BaseModel):
     train: TrainConfig = pydantic.Field(
         default=TrainConfig(), description="Training configuration"
     )
+
+    http: HTTPConfig = pydantic.Field(default=HTTPConfig(), description="HTTP configuration")
 
     class Config:
         extra = "forbid"  # Forbid extra fields in the config
@@ -191,13 +197,34 @@ def _save_lora_model(
     with open(os.path.join(model_path, "adapter_model.pt"), "wb") as f:
         torch.save(states, f)
 
+async def _retry_post(client: httpx.AsyncClient, url: str, json_data: dict, http_config: HTTPConfig) -> httpx.Response:
+    for attempt in range(http_config.retry_limit):
+        try:
+            resp = await client.post(url, json=json_data)
+            resp.raise_for_status()
+            return resp
+        except httpx.RequestError as e:
+            logger.warning(f"HTTP request error on attempt {attempt + 1}/{http_config.retry_limit}: {e}")
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code / 100 == 4:
+                logger.error(f"Client error {e.response.status_code}: {e.response.text}, ignore retries.")
+                raise 
+            logger.warning(f"HTTP status error on attempt {attempt + 1}/{http_config.retry_limit}: {e}")
+
+        backoff_time = http_config.retry_backoff * (2 ** attempt)
+        backoff_time += random.uniform(0, http_config.retry_jitter)
+        await asyncio.sleep(backoff_time)
+
+    raise RuntimeError(f"Failed to POST to {url} after {http_config.retry_limit} attempts")
+
 
 class VLLMWorker(Worker):
-    def __init__(self, worker_id: str,  client: httpx.AsyncClient, addr: str, chat_template: "_ChatTemplate") -> None:
+    def __init__(self, worker_id: str,  client: httpx.AsyncClient, addr: str, chat_template: "_ChatTemplate", http_config: HTTPConfig) -> None:
         self._worker_id = worker_id
         self._http_client = client
         self._addr = addr
         self._chat_template = chat_template
+        self._http_config = http_config
 
     async def close(self) -> None:
         import traceback
@@ -225,17 +252,12 @@ class VLLMWorker(Worker):
             }
             if args.seed is not None:
                 request_json["seed"] = args.seed
-
-            resp = await self._http_client.post(
-                f"{self._addr}/v1/completions",
-                json=request_json
-            )
             try:
-                resp.raise_for_status()
+                resp = await _retry_post(self._http_client, f"{self._addr}/v1/completions", request_json, self._http_config)
             except httpx.HTTPStatusError as e:
-                if resp.status_code / 100 == 4:
+                if e.response.status_code / 100 == 4:
                     # 4xx is client error
-                    logger.info("ignore request vllm error %d: %s", resp.status_code,  resp.text)
+                    logger.info("ignore request vllm error %d: %s", e.response.status_code,  e.response.text)
                     return response
                 raise 
             response_json = resp.json()
@@ -318,6 +340,7 @@ class VLLMCluster(Cluster):
             client=self._http_client,
             addr=addr,
             chat_template=self._chat_template,
+            http_config=self._base_config.http,
         )
 
 
