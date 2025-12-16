@@ -16,13 +16,23 @@ lora_name = "069410cf-7c97-7a22-8000-cb3c9921fc2a"
 cli = httpx.Client(timeout=3600.0)
 tokenizer = transformers.AutoTokenizer.from_pretrained("Qwen/Qwen3-4B")
 prompt: str = tokenizer.apply_chat_template(request, add_generation_token=True, tokenize=False,)
-resp = cli.post(
-    f"{vllm_endpoint}/v1/completions",
-    json={
+request_json = {
         "model": "base",
         "prompt": prompt,
         "max_tokens": 16
-    }
+        "seed": 42
+}
+resp = cli.post(
+    f"{vllm_endpoint}/v1/completions",
+    json=request_json
+)
+resp.raise_for_status()
+print(resp.json())
+
+request_json["model"] = lora_name
+resp = cli.post(
+    f"{vllm_endpoint}/v1/completions",
+    json=request_json
 )
 resp.raise_for_status()
 print(resp.json())
