@@ -612,7 +612,7 @@ async def eval_sample(
     ok, _ = verify_dapo(response, ground_truth)
     seed: int | None = WorkerSeed.get(None)
     if seed is not None:
-        with open(f"eval_logs/seed_{seed}_eval_.jsonl", "a") as outf:
+        with open(f"eval_logs/seed_{seed}_eval.jsonl", "a") as outf:
             worker_id = worker.id()
             json.dump({
                 "lora_id": worker_id,
