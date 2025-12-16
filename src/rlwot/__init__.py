@@ -712,7 +712,6 @@ def _generate_noise(seed: int, base_model: dict[str, torch.Tensor], sigma: float
         noise_a, noise_b = _generate_lora_noise(seed + offset, m, n, k, sigma)
         noise[f"{weight_name}.lora_A.weight"] = noise_a
         noise[f"{weight_name}.lora_B.weight"] = noise_b
-    # logger.info("noise keys %s", noise.keys())
     
     return noise
 
@@ -738,12 +737,10 @@ async def _calc_worker_gradient(semaphore: asyncio.Semaphore,
                                 concurrency=cfg.concurrency, 
                                 rollout_seed=seed,
                                 pbar=pbar)
-        
-        noise = _generate_noise(seed, base_model, sigma=cfg.sigma)
 
         with torch.no_grad():
             # symmetric noise
-            new_model = {k: (base_model[k] - noise[k]) if 'lora_A' in k else (base_model[k] + noise[k])  for k in base_model.keys()}
+            new_model = {k: (base_model[k] - noise[k]) if k.endswith(".lora_A.weight") else (base_model[k] + noise[k])  for k in base_model.keys()}
         
         negative_score = await eval(cluster=cluster, 
                                 model=new_model, 
