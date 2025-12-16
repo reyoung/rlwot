@@ -4,7 +4,10 @@ pids=()
 export VLLM_ALLOW_RUNTIME_LORA_UPDATING=True
 export MODEL_NAME=Qwen/Qwen3-4B
 export VLLM_BATCH_INVARIANT=1 
-for i in {0..3}
+export DP_SIZE=4
+
+
+for ((i=0; i<$DP_SIZE; i++))
 do
     CUDA_VISIBLE_DEVICES=$i vllm serve Qwen/Qwen3-4B \
         --enable-lora \
