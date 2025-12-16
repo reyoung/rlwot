@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Annotated, List, Literal
 import random
 from dataclasses import dataclass
+import contextvars
 
 import datasets
 import httpx
@@ -34,6 +35,8 @@ class GenerateArgs(pydantic.BaseModel):
     max_tokens: int = pydantic.Field(strict=True, gt=0, default=256)
     seed: int | None = None
     context_window: int = pydantic.Field(default=8192, description="Context window size")
+
+WorkerSeed = contextvars.ContextVar("worker_seed")
 
 @dataclass
 class ChatCompletionRequest:
@@ -159,6 +162,9 @@ class Cluster(typing.Protocol):
         raise NotImplementedError("new_worker is not implemented")
 
 class Worker(typing.Protocol):
+    def id(self) -> str:
+        return ""
+
     async def close(self) -> None: 
         raise NotImplementedError("close is not implemented")
 
@@ -226,6 +232,9 @@ class VLLMWorker(Worker):
         self._addr = addr
         self._chat_template = chat_template
         self._http_config = http_config
+    
+    def id(self) -> str:
+        return self._worker_id
 
     async def close(self) -> None:
         import traceback
@@ -601,6 +610,21 @@ async def eval_sample(
     req, ground_truth = sample
     response = await worker.chat_completion(req.messages, req.args)
     ok, _ = verify_dapo(response, ground_truth)
+    seed: int | None = WorkerSeed.get(None)
+    if seed is not None:
+        with open(f"eval_logs/seed_{seed}_eval_.jsonl", "a") as outf:
+            worker_id = worker.id()
+            json.dump({
+                "lora_id": worker_id,
+                "request": req.messages,
+                "generation_args": req.args.model_dump() if req.args is not None else None,
+                "response": response,
+                "ground_truth": ground_truth,
+                "ok": ok,
+            }, outf)
+            outf.write("\n")
+
+
     return float(ok)
 
 def _attach_default_gen_args(req: ChatCompletionRequest) -> ChatCompletionRequest:
@@ -723,7 +747,7 @@ async def _calc_worker_gradient(semaphore: asyncio.Semaphore,
                                 dataset: typing.Callable[[],typing.Generator[tuple[ChatCompletionRequest, str], None, None]],
                                 pbar: tqdm.tqdm,
                                 worker_id: int) -> WorkerGradient:
-    logger.info("worker main %d", worker_id)
+    WorkerSeed.set(seed)
     try:
         noise = _generate_noise(seed, base_model, sigma=cfg.sigma)
 
@@ -732,30 +756,27 @@ async def _calc_worker_gradient(semaphore: asyncio.Semaphore,
 
 
         positive_score = await eval(cluster=cluster, 
-                                model=new_model, 
-                                data=dataset(), 
-                                concurrency=cfg.concurrency, 
-                                rollout_seed=seed,
-                                pbar=pbar)
-        sub = False
+                                    model=new_model, 
+                                    data=dataset(), 
+                                    concurrency=cfg.concurrency, 
+                                    rollout_seed=seed,
+                                    pbar=pbar)
 
         with torch.no_grad():
             # symmetric noise
             new_model = {}
             for k, v in base_model.items():
                 if k.endswith(".lora_A.weight"):
-                    sub = True
                     new_model[k] = v - noise[k]
                 else:
                     new_model[k] = v + noise[k]
-        logger.info(f"worker {worker_id} sub {sub}")
         
         negative_score = await eval(cluster=cluster, 
-                                model=new_model, 
-                                data=dataset(), 
-                                concurrency=cfg.concurrency, 
-                                rollout_seed=seed,
-                                pbar=pbar)
+                                    model=new_model, 
+                                    data=dataset(), 
+                                    concurrency=cfg.concurrency, 
+                                    rollout_seed=seed,
+                                    pbar=pbar)
 
         wg = WorkerGradient(seed=seed, positive_score=positive_score, negative_score=negative_score)
         logger.info(f"Worker seed {seed} positive score {positive_score} negative score {negative_score}")
