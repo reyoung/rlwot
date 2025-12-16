@@ -365,11 +365,12 @@ async def train_loop(
         weight_names = _extract_weight_names(base_model)
         with torch.no_grad():
             for offset, weight_name in enumerate(weight_names):
-                logger.info("updating weight %s", weight_name)
                 origin_a = base_model[f"{weight_name}.lora_A.weight"]
                 origin_b = base_model[f"{weight_name}.lora_B.weight"]
                 k, n = origin_a.shape
                 m, k = origin_b.shape
+
+                logger.info("updating weight %s, m,n,k = %d,%d,%d", weight_name, m, n, k)
                 update = torch.zeros((m, n))
                 for wg in worker_grads:
                     noise_a, noise_b = _generate_lora_noise(wg.seed + offset, m, n, k, cfg.sigma)
