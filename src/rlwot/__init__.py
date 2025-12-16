@@ -316,8 +316,8 @@ def extract_lora_weights(mat: torch.Tensor, rank: int) -> tuple[torch.Tensor, to
     # A = U_r @ sqrt(S_r), B = sqrt(S_r) @ Vt_r
     sqrt_S_r = torch.sqrt(S_r)
     
-    lora_A = U_r * sqrt_S_r.unsqueeze(0)  # (m, rank)
-    lora_B = sqrt_S_r.unsqueeze(1) * Vt_r  # (rank, n)
+    lora_B = U_r * sqrt_S_r.unsqueeze(0)  # (m, rank)
+    lora_A = sqrt_S_r.unsqueeze(1) * Vt_r  # (rank, n)
     
     return lora_A, lora_B
 
