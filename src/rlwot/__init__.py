@@ -691,10 +691,10 @@ def _generate_noise(seed: int, base_model: dict[str, torch.Tensor], sigma: float
     with torch.no_grad():
         with torch.random.fork_rng(devices=["cpu"]):
             torch.manual_seed(seed)
-        new_model = {}
-        for k, v in base_model.items():
-            noise = torch.randn_like(v) * sigma # Small noise for exploration
-            new_model[k] = noise
+            new_model = {}
+            for k, v in base_model.items():
+                noise = torch.randn_like(v) * sigma # Small noise for exploration
+                new_model[k] = noise
         return new_model
 
 
