@@ -720,8 +720,11 @@ async def _calc_worker_gradient(semaphore: asyncio.Semaphore,
                                 concurrency=cfg.concurrency, 
                                 rollout_seed=seed,
                                 pbar=pbar)
+        
+        noise = _generate_noise(seed, base_model, sigma=-cfg.sigma)
+
         with torch.no_grad():
-            new_model = {k: base_model[k] - noise[k] for k in base_model.keys()}
+            new_model = {k: base_model[k] + noise[k] for k in base_model.keys()}
         
         negative_score = await eval(cluster=cluster, 
                                 model=new_model, 
@@ -777,12 +780,12 @@ async def train_loop(
         for wg in worker_grads:
             logger.info(f"Epoch {epoch_id} Worker seed {wg.seed} positive score {wg.positive_score} negative score {wg.negative_score}")
 
-            diff = _generate_noise(wg.seed, base_model, sigma=cfg.sigma)
-            score_diff = wg.positive_score - wg.negative_score
+            diff_positive = _generate_noise(wg.seed, base_model, sigma=cfg.sigma)
+            diff_negative = _generate_noise(wg.seed, base_model, sigma=-cfg.sigma)
             with torch.no_grad():
                 update_norms = []
                 for k in base_model.keys():
-                    update = diff[k] * (score_diff / 2.0)
+                    update = (diff_positive[k] - diff_negative[k]) * (wg.positive_score - wg.negative_score) / 2.0
                     update_norms.append(torch.norm(update, 2).item())
                     base_model[k] += update
                 logger.info(f"Epoch {epoch_id} Worker seed {wg.seed} update norm {torch.norm(torch.tensor(update_norms), 2).item()}")
