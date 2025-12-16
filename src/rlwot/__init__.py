@@ -686,17 +686,33 @@ class WorkerGradient(typing.NamedTuple):
     positive_score: float
     negative_score: float
 
-def _generate_noise(seed: int, base_model: dict[str, torch.Tensor], sigma: float):
-    # rng = random.Random(seed)
+def _generate_lora_noise(seed: int, m: int, n: int, k: int, sigma: float) -> tuple[torch.Tensor, torch.Tensor]:
     with torch.no_grad():
         with torch.random.fork_rng(devices=["cpu"]):
             torch.manual_seed(seed)
-            new_model = {}
-            for k, v in base_model.items():
-                noise = torch.randn_like(v) * sigma # Small noise for exploration
-                new_model[k] = noise
-        return new_model
+            A = torch.randn((m, k)) * sigma
+            B = torch.randn((k, n))
+        return A, B
 
+def _extract_weight_names(base_model: dict[str, torch.Tensor]) -> list[str]:
+    weight_names = [k.removesuffix(".lora_A.weight") for k in base_model.keys() if k.endswith(".lora_A.weight")]
+    weight_names.sort()
+    return weight_names
+
+
+def _generate_noise(seed: int, base_model: dict[str, torch.Tensor], sigma: float):
+    weight_names = _extract_weight_names(base_model)
+    new_model = {}
+    for offset, k in enumerate(weight_names):
+        a = base_model[f"{k}.lora_A.weight"]
+        b = base_model[f"{k}.lora_B.weight"]
+        m, k = a.shape
+        _, n = b.shape
+        noise_a, noise_b = _generate_lora_noise(seed + offset, m, n, k, sigma)
+        new_model[f"{k}.lora_A.weight"] = noise_a
+        new_model[f"{k}.lora_B.weight"] = noise_b
+    
+    return new_model
 
 async def _calc_worker_gradient(semaphore: asyncio.Semaphore, 
                                 seed: int, 
@@ -724,6 +740,7 @@ async def _calc_worker_gradient(semaphore: asyncio.Semaphore,
         noise = _generate_noise(seed, base_model, sigma=cfg.sigma)
 
         with torch.no_grad():
+            # symmetric noise
             new_model = {k: (base_model[k] - noise[k]) if 'lora_A' in k else (base_model[k] + noise[k])  for k in base_model.keys()}
         
         negative_score = await eval(cluster=cluster, 
@@ -738,6 +755,36 @@ async def _calc_worker_gradient(semaphore: asyncio.Semaphore,
         return wg
     finally:
         semaphore.release()
+
+@torch.no_grad()
+def extract_lora_weights(mat: torch.Tensor, rank: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """Extract LoRA weights from a matrix using SVD decomposition.
+    
+    Args:
+        mat: Input matrix of shape (m, n)
+        rank: Target rank for the decomposition
+        
+    Returns:
+        Tuple of (lora_A, lora_B) where lora_A has shape (m, rank) and lora_B has shape (rank, n)
+        such that lora_A @ lora_B approximates mat
+    """
+    # Perform SVD decomposition: mat = U @ S @ V^T
+    U, S, Vt = torch.linalg.svd(mat, full_matrices=False)
+    
+    # Take only the top 'rank' singular values
+    U_r = U[:, :rank]  # (m, rank)
+    S_r = S[:rank]     # (rank,)
+    Vt_r = Vt[:rank, :]  # (rank, n)
+    
+    # Split the singular values between A and B
+    # A = U_r @ sqrt(S_r), B = sqrt(S_r) @ Vt_r
+    sqrt_S_r = torch.sqrt(S_r)
+    
+    lora_A = U_r * sqrt_S_r.unsqueeze(0)  # (m, rank)
+    lora_B = sqrt_S_r.unsqueeze(1) * Vt_r  # (rank, n)
+    
+    return lora_A, lora_B
+
 
 
 async def train_loop(
@@ -773,24 +820,41 @@ async def train_loop(
                         worker_id
                     ))
                 )
-            worker_grads = await asyncio.gather(*worker_grads_tasks)
+            worker_grads: list[WorkerGradient] = await asyncio.gather(*worker_grads_tasks)
         
         positive_scores = sum(wg.positive_score for wg in worker_grads) / len(worker_grads)
         negative_scores = sum(wg.negative_score for wg in worker_grads) / len(worker_grads)
-        for wg in worker_grads:
-            logger.info(f"Epoch {epoch_id} Worker seed {wg.seed} positive score {wg.positive_score} negative score {wg.negative_score}")
-
-            diff_positive = _generate_noise(wg.seed, base_model, sigma=cfg.sigma)
-            diff_negative = _generate_noise(wg.seed, base_model, sigma=-cfg.sigma)
-            with torch.no_grad():
-                update_norms = []
-                for k in base_model.keys():
-                    update = (diff_positive[k] - diff_negative[k]) * (wg.positive_score - wg.negative_score) / 2.0
-                    update_norms.append(torch.norm(update, 2).item())
-                    base_model[k] += update
-                logger.info(f"Epoch {epoch_id} Worker seed {wg.seed} update norm {torch.norm(torch.tensor(update_norms), 2).item()}")
-
         logger.info(f"Epoch {epoch_id} positive score {positive_scores} negative score {negative_scores}")
+
+        weight_names = _extract_weight_names(base_model)
+        with torch.no_grad():
+            for offset, weight_name in enumerate(weight_names):
+                logger.info("updating weight %s", weight_name)
+                origin_a = base_model[f"{weight_name}.lora_A.weight"]
+                origin_b = base_model[f"{weight_name}.lora_B.weight"]
+                m, k = origin_a.shape
+                _, n = origin_b.shape
+                update = torch.zeros((m, n))
+                for wg in worker_grads:
+                    noise_a, noise_b = _generate_lora_noise(wg.seed + offset, m, n, k, cfg.sigma)
+
+                    positive_noise = noise_a @ noise_b
+                    negative_noise = -noise_a @ noise_b
+
+                    positive_score = wg.positive_score
+                    negative_score = wg.negative_score
+
+                    update += (positive_noise - negative_noise) * (positive_score - negative_score) / 2.0
+                
+                lora_a_update, lora_b_update = extract_lora_weights(update, rank=k)
+                base_model[f"{weight_name}.lora_A.weight"] += lora_a_update
+                base_model[f"{weight_name}.lora_B.weight"] += lora_b_update
+
+                abs_error = torch.mean(torch.abs(update - lora_a_update @ lora_b_update))
+                logger.info(f"Weight {weight_name} abs error {abs_error}")
+
+
+
         with torch.no_grad():
             torch.save(base_model, f"./model_{epoch_id}.pt")
             
