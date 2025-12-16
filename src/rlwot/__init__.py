@@ -473,6 +473,7 @@ class StandaloneVLLMCluster(Cluster):
             client=self._http_client,
             addr=self.addr,
             chat_template=self._chat_template,
+            http_config=self._base_config.http,
         )
 
 
