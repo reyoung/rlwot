@@ -19,7 +19,7 @@ prompt: str = tokenizer.apply_chat_template(request, add_generation_token=True, 
 request_json = {
         "model": "base",
         "prompt": prompt,
-        "max_tokens": 16
+        "max_tokens": 16,
         "seed": 42
 }
 resp = cli.post(
