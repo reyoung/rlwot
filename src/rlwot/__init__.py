@@ -737,10 +737,18 @@ async def _calc_worker_gradient(semaphore: asyncio.Semaphore,
                                 concurrency=cfg.concurrency, 
                                 rollout_seed=seed,
                                 pbar=pbar)
+        sub = False
 
         with torch.no_grad():
             # symmetric noise
-            new_model = {k: (base_model[k] - noise[k]) if k.endswith(".lora_A.weight") else (base_model[k] + noise[k])  for k in base_model.keys()}
+            new_model = {}
+            for k, v in base_model.items():
+                if k.endswith(".lora_A.weight"):
+                    sub = True
+                    new_model[k] = v - noise[k]
+                else:
+                    new_model[k] = v + noise[k]
+        logger.info(f"worker {worker_id} sub {sub}")
         
         negative_score = await eval(cluster=cluster, 
                                 model=new_model, 
