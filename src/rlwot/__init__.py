@@ -721,10 +721,10 @@ async def _calc_worker_gradient(semaphore: asyncio.Semaphore,
                                 rollout_seed=seed,
                                 pbar=pbar)
         
-        noise = _generate_noise(seed, base_model, sigma=-cfg.sigma)
+        noise = _generate_noise(seed, base_model, sigma=cfg.sigma)
 
         with torch.no_grad():
-            new_model = {k: base_model[k] + noise[k] for k in base_model.keys()}
+            new_model = {k: (base_model[k] - noise[k]) if 'lora_A' in k else (base_model[k] + noise[k])  for k in base_model.keys()}
         
         negative_score = await eval(cluster=cluster, 
                                 model=new_model, 
