@@ -374,8 +374,8 @@ async def train_loop(
                 for wg in worker_grads:
                     noise_a, noise_b = _generate_lora_noise(wg.seed + offset, m, n, k, cfg.sigma)
 
-                    positive_noise = noise_a @ noise_b
-                    negative_noise = -noise_a @ noise_b
+                    positive_noise = noise_b @ noise_a
+                    negative_noise = -noise_b @ noise_a
 
                     positive_score = wg.positive_score
                     negative_score = wg.negative_score
