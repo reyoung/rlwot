@@ -757,8 +757,40 @@ async def train_loop(
             
 
 async def amain(config: Config):
-    logging.basicConfig(level=logging.DEBUG if config.debug else logging.INFO)
+    # Configure logging to both file and stderr
+    log_level = logging.DEBUG if config.debug else logging.INFO
+    log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    
+    # Create logs directory if it doesn't exist
+    log_dir = os.path.join(config.save_dir, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    
+    # Generate log filename with timestamp
+    log_filename = os.path.join(log_dir, f"rlwot_{time.strftime('%Y%m%d_%H%M%S')}.log")
+    
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(log_level)
+    
+    # Remove existing handlers to avoid duplicates
+    root_logger.handlers.clear()
+    
+    # Create file handler
+    file_handler = logging.FileHandler(log_filename, mode='a', encoding='utf-8')
+    file_handler.setLevel(log_level)
+    file_handler.setFormatter(logging.Formatter(log_format))
+    
+    # Create stderr handler
+    stderr_handler = logging.StreamHandler(sys.stderr)
+    stderr_handler.setLevel(log_level)
+    stderr_handler.setFormatter(logging.Formatter(log_format))
+    
+    # Add both handlers to root logger
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(stderr_handler)
+    
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    logger.info(f"Logging to file: {log_filename}")
     async with connect_cluster(
         config
     ) as cluster:
