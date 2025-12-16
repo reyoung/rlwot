@@ -1,26 +1,18 @@
 import argparse
 import asyncio
-import collections
-import contextlib
-import functools
 import logging
 import os
-import subprocess
 import sys
 import time
 import traceback
 import typing
-from uuid_extensions import uuid7
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Annotated, List
+from typing import List
 import random
 import contextvars
 from .cluster import *
 
 import datasets
-import httpx
-import pydantic
 import torch
 import transformers
 import yaml
@@ -31,9 +23,6 @@ logger = logging.getLogger(__name__)
 
 
 WorkerSeed = contextvars.ContextVar("worker_seed")
-
-
-
 
 
 def parse_args() -> Config:
@@ -92,8 +81,8 @@ def generate_default_lora_model(config: Config) -> dict[str, torch.Tensor]:
         # base_model.model.model.layers.0.mlp.down_proj.lora_A.weight
         prefix = name[: -len(".weight")]
 
-        lora_a = torch.zeros((rows, config.lora_r), dtype=torch.bfloat16)
-        lora_b = torch.zeros((config.lora_r, cols), dtype=torch.bfloat16)
+        lora_b = torch.zeros((rows, config.lora_r), dtype=torch.bfloat16)
+        lora_a = torch.zeros((config.lora_r, cols), dtype=torch.bfloat16)
 
         res[f"{prefix}.lora_A.weight"] = lora_a
         res[f"{prefix}.lora_B.weight"] = lora_b
@@ -233,8 +222,8 @@ def _generate_lora_noise(seed: int, m: int, n: int, k: int, sigma: float) -> tup
     with torch.no_grad():
         with torch.random.fork_rng(devices=["cpu"]):
             torch.manual_seed(seed)
-            A = torch.randn((m, k)) * sigma
-            B = torch.randn((k, n))
+            A = torch.randn((k, n)) * sigma
+            B = torch.randn((m, k))
         return A, B
 
 def _extract_weight_names(base_model: dict[str, torch.Tensor]) -> list[str]:
@@ -250,8 +239,8 @@ def _generate_noise(seed: int, base_model: dict[str, torch.Tensor], sigma: float
     for offset, weight_name in enumerate(weight_names):
         a = base_model[f"{weight_name}.lora_A.weight"]
         b = base_model[f"{weight_name}.lora_B.weight"]
-        m, k = a.shape
-        _, n = b.shape
+        k, n= a.shape
+        m, _ = b.shape
         noise_a, noise_b = _generate_lora_noise(seed + offset, m, n, k, sigma)
         noise[f"{weight_name}.lora_A.weight"] = noise_a
         noise[f"{weight_name}.lora_B.weight"] = noise_b
