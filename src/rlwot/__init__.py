@@ -702,7 +702,7 @@ def _extract_weight_names(base_model: dict[str, torch.Tensor]) -> list[str]:
 
 def _generate_noise(seed: int, base_model: dict[str, torch.Tensor], sigma: float):
     weight_names = _extract_weight_names(base_model)
-    logger.info(f"Generating noise for {weight_names} weights")
+    # logger.info(f"Generating noise for {weight_names} weights")
     noise = {}
     for offset, k in enumerate(weight_names):
         a = base_model[f"{k}.lora_A.weight"]
@@ -712,6 +712,7 @@ def _generate_noise(seed: int, base_model: dict[str, torch.Tensor], sigma: float
         noise_a, noise_b = _generate_lora_noise(seed + offset, m, n, k, sigma)
         noise[f"{k}.lora_A.weight"] = noise_a
         noise[f"{k}.lora_B.weight"] = noise_b
+    logger.info("noise keys %s", noise.keys())
     
     return noise
 
