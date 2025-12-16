@@ -14,7 +14,8 @@ do
         --served-model-name base \
         --max-lora-rank 8 --max-loras 10 \
         --uvicorn-log-level error \
-        --port 5820$i --max-model-len 8192 &
+        --host 127.0.0.1\
+        --port 5900$i --max-model-len 8192 &
     pids+=($!)
 done
 
