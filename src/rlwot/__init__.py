@@ -33,6 +33,7 @@ class GenerateArgs(pydantic.BaseModel):
     recursive: bool = pydantic.Field(default=True)
     max_tokens: int = pydantic.Field(strict=True, gt=0, default=256)
     seed: int | None = None
+    context_window: int = pydantic.Field(default=8192, description="Context window size")
 
 @dataclass
 class ChatCompletionRequest:
@@ -207,7 +208,7 @@ async def _retry_post(client: httpx.AsyncClient, url: str, json_data: dict, http
             logger.warning(f"HTTP request error on attempt {attempt + 1}/{http_config.retry_limit}: {e}")
         except httpx.HTTPStatusError as e:
             if e.response.status_code / 100 == 4:
-                logger.error(f"Client error {e.response.status_code}: {e.response.text}, ignore retries.")
+                logger.debug(f"Client error {e.response.status_code}: {e.response.text}, ignore retries.")
                 raise 
             logger.warning(f"HTTP status error on attempt {attempt + 1}/{http_config.retry_limit}: {e}")
 
@@ -244,11 +245,20 @@ class VLLMWorker(Worker):
         prompt: str = await self._chat_template.apply_chat_template(messages, add_generation_token=True)
         response: str = ""
 
+        total_tokens: int = 0
         while True:
+            if total_tokens + args.max_tokens > args.context_window:
+                max_tokens = args.context_window - total_tokens
+            else:
+                max_tokens = args.max_tokens
+            
+            if max_tokens <= 0:
+                return response
+
             request_json = {
                 "model": self._worker_id,
                 "prompt": prompt + response,
-                "max_tokens": args.max_tokens,
+                "max_tokens": max_tokens,
             }
             if args.seed is not None:
                 request_json["seed"] = args.seed
@@ -257,7 +267,7 @@ class VLLMWorker(Worker):
             except httpx.HTTPStatusError as e:
                 if e.response.status_code / 100 == 4:
                     # 4xx is client error
-                    logger.info("ignore request vllm error %d: %s", e.response.status_code,  e.response.text)
+                    logger.debug("ignore request vllm error %d: %s", e.response.status_code,  e.response.text)
                     return response
                 raise 
             response_json = resp.json()
@@ -267,6 +277,8 @@ class VLLMWorker(Worker):
 
             if c0["finish_reason"] != "length":
                 return response
+
+            total_tokens: int = response_json["usage"]["total_tokens"]
 
 
 class VLLMCluster(Cluster):
