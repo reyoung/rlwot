@@ -15,7 +15,7 @@ import datasets
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from vllm import LLM, SamplingParams
 import torch
-from .dapo_utils import verify as dapo_verify
+from dapo_utils import verify as dapo_verify
 
 
 def parse_args():
@@ -284,6 +284,7 @@ def main():
                 # Use sigma_or_scale=1.0 so the applied scale is `coeff`
                 handles.append(engines[0].collective_rpc.remote("perturb_self_weights", args=(seed, coeff, False)))
             ray.get([e.collective_rpc.remote("broadcast_all_weights", args=(0,)) for e in engines])
+
     cleanup()
 
 
