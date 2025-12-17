@@ -13,11 +13,15 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import datasets
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from vllm import LLM, SamplingParams
-from dapo_utils import verify as dapo_verify
+from rlwot.dapo_utils import verify as dapo_verify
 import logging
+import swanlab
 
 logger = logging.getLogger(__name__)
 
+def _report(args: argparse.Namespace, data: dict, step: int):
+    if args.use_swanlab:
+        swanlab.log(data, step=step)
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -33,6 +37,11 @@ def parse_args():
     )
     parser.add_argument("--num_iterations", type=int, default=1)
     parser.add_argument("--epoch_size", type=int, default=32)
+    parser.add_argument("--swanlab_project", type=str, default=None, required=False)
+    parser.add_argument("--swanlab_workspace", type=str, default=None, required=False)
+    parser.add_argument("--swanlab_group", type=str, default=None, required=False)
+    parser.add_argument("--swanlab_name", type=str, default=None, required=False)
+    parser.add_argument("--use_swanlab", action="store_true", default=False)
 
     args = parser.parse_args()
     os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_devices
@@ -53,6 +62,14 @@ def parse_args():
             logging.StreamHandler(sys.stderr),
         ],
     )
+    if args.use_swanlab:
+        swanlab.init(
+            project=args.swanlab_project,
+            workspace=args.swanlab_workspace,
+            group=args.swanlab_group,
+            name=args.swanlab_name,
+            config=args.__dict__,
+        )
 
     return args
 
@@ -128,7 +145,7 @@ def launch_engines(args: argparse.Namespace, model_path: str, engines: list, pgs
                 model=args.model_name,
                 tensor_parallel_size=1,
                 distributed_executor_backend="ray",
-                worker_extension_cls="worker_ext.WorkerExtension",
+                worker_extension_cls="rlwot.worker_ext.WorkerExtension",
                 dtype="float16",
                 enable_prefix_caching=False,
                 enforce_eager=False,
@@ -308,6 +325,8 @@ def main():
             logger.info(
                 f"iteration={iteration} epoch={epoch_id} n_rollouts={n_rollouts} Mean reward: {mean_reward}, std: {std_reward}, min: {min_reward}, max: {max_reward}"
             )
+            _report(args, {"mean_reward": mean_reward, "std_reward": std_reward, "min_reward": min_reward, "max_reward": max_reward,
+            "iteration": iteration, "epoch": epoch_id}, step=n_rollouts)
 
             # z-score normalize the rewards
             for k in seeds_perf:
