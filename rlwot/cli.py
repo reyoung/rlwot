@@ -242,7 +242,7 @@ def main():
     for iteration in range(args.num_iterations):
         for epoch_id, epoch in enumerate(batch_loader(dataset, args.epoch_size)):
             seeds = [random.randint(0, 1_000_000) for _ in range(args.population_size)]
-            n_rollouts += len(seeds) + len(epoch)
+            n_rollouts += len(seeds) * len(epoch)
             seeds_perf = {}
 
             seed_iter = iter(seeds)
