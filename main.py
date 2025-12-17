@@ -95,6 +95,8 @@ def main():
 
     dataset = load_dataset()
 
+    cleanup()
+
 
 
 if __name__ == "__main__":
