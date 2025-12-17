@@ -93,6 +93,7 @@ def main():
 
     save_base_model(args, model_save_dir)
 
+    dataset = load_dataset()
 
 
 
