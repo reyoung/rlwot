@@ -113,7 +113,7 @@ def launch_engines(args: argparse.Namespace, model_path: str, engines: list, pgs
                 model=args.model_name,
                 tensor_parallel_size=1,
                 distributed_executor_backend="ray",
-                worker_extension_cls="worker_extn.WorkerExtension",
+                worker_extension_cls="worker_ext.WorkerExtension",
                 dtype="float16",
                 enable_prefix_caching=False,
                 enforce_eager=False,
