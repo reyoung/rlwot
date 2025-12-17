@@ -23,9 +23,9 @@ class WorkerExtension:
     def perturb_self_weights(self, seed, noise_scale, negate=False):
         scale = float(noise_scale)
         sign = -1.0 if negate else 1.0
+        gen = torch.Generator(device=self.device)
+        gen.manual_seed(int(seed))
         for _, p in self.model_runner.model.named_parameters():
-            gen = torch.Generator(device=p.device)
-            gen.manual_seed(int(seed))
             noise = torch.randn(p.shape, dtype=p.dtype, device=p.device, generator=gen)
             p.data.add_(sign * scale * noise)
             del noise
@@ -35,9 +35,9 @@ class WorkerExtension:
         return True
 
     def restore_self_weights(self, seed, SIGMA):
+        gen = torch.Generator(device=self.device)
+        gen.manual_seed(int(seed))
         for _, p in self.model_runner.model.named_parameters():
-            gen = torch.Generator(device=p.device)
-            gen.manual_seed(int(seed))
             noise = torch.randn(p.shape, dtype=p.dtype, device=p.device, generator=gen)
             p.data.add_(-float(SIGMA) * noise)
             del noise
