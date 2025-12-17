@@ -19,9 +19,11 @@ import swanlab
 
 logger = logging.getLogger(__name__)
 
+
 def _report(args: argparse.Namespace, data: dict, step: int):
     if args.use_swanlab:
         swanlab.log(data, step=step)
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -325,8 +327,18 @@ def main():
             logger.info(
                 f"iteration={iteration} epoch={epoch_id} n_rollouts={n_rollouts} Mean reward: {mean_reward}, std: {std_reward}, min: {min_reward}, max: {max_reward}"
             )
-            _report(args, {"mean_reward": mean_reward, "std_reward": std_reward, "min_reward": min_reward, "max_reward": max_reward,
-            "iteration": iteration, "epoch": epoch_id}, step=n_rollouts)
+            _report(
+                args,
+                {
+                    "mean_reward": mean_reward,
+                    "std_reward": std_reward,
+                    "min_reward": min_reward,
+                    "max_reward": max_reward,
+                    "iteration": iteration,
+                    "epoch": epoch_id,
+                },
+                step=n_rollouts,
+            )
 
             # z-score normalize the rewards
             for k in seeds_perf:
