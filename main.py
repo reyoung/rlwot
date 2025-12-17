@@ -44,6 +44,7 @@ def parse_args():
         f"{args.model_name.replace('/', '---')}dapo_math",
         datetime.now().strftime("%Y%m%d_%H%M%S"),
     )
+    os.makedirs(args.experiment_dir, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
