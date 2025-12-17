@@ -13,7 +13,9 @@ import ray
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import datasets
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
-from vllm import LLM
+from vllm import LLM, SamplingParams
+import torch
+from .dapo_utils import verify as dapo_verify
 
 
 def parse_args():
@@ -28,6 +30,9 @@ def parse_args():
     parser.add_argument(
         "--experiment_dir", type=str, default=os.path.expanduser("~/experiments")
     )
+    parser.add_argument("--num_iterations", type=int, default=1)
+    parser.add_argument("--epoch_size", type=int, default=32)
+
 
     args = parser.parse_args()
     os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_devices
@@ -56,6 +61,7 @@ def save_base_model(args: argparse.Namespace, model_save_dir: str):
     base_model.save_pretrained(base_model_dir)
     del base_model
     gc.collect()
+    return tokenizer
 
 
 def _map_dapo_math(example):
@@ -131,6 +137,38 @@ def launch_engines(args: argparse.Namespace, model_path: str, engines: list, pgs
         for i in range(args.num_engines)
     ])
 
+def batch_loader(dataset, batch_size):
+    batch = []
+    for item in dataset:
+        batch.append(item)
+        if len(batch) == batch_size:
+            yield batch
+            batch.clear()
+    
+    if batch:
+        yield batch
+
+def generate(llm, prompts: list[str]):
+    sampling_params = SamplingParams(
+        temperature=0.0,
+        seed=42,
+        max_tokens=1024,
+    )
+    handle = llm.generate.remote(prompts, sampling_params, use_tqdm=False)
+    return handle
+
+def _postprocess_outputs(outputs, samples):
+    rewards = []
+    for output, data in zip(outputs, samples):
+        ground_truth:str = samples["ground_truth"]
+        response = output.outputs[0].text
+        ok, _ = dapo_verify(response, ground_truth)
+        # r = reward_function(response, data["numbers"], data["target"])
+        rewards.append(float(ok))
+    return {
+        "rewards": rewards,
+        "avg_reward": float(np.mean(rewards)) if rewards else 0.0,
+    }
 
 def main():
     args = parse_args()
@@ -160,12 +198,92 @@ def main():
 
     model_save_dir = os.path.join(args.experiment_dir, "models")
 
-    save_base_model(args, model_save_dir)
+    tokenizer = save_base_model(args, model_save_dir)
 
     dataset = load_dataset()
 
     launch_engines(args, model_save_dir, engines, pgs)
 
+    for iteration in range(args.num_iterations):
+        for epoch_id, epoch in enumerate(batch_loader(dataset, args.epoch_size)):
+            seeds = [random.randint(0, 1_000_000) for _ in range(args.polulation_size)]
+            seeds_perf = {}
+
+            seed_iter = iter(seeds)
+            inflight = {}
+            result_this_gen = []
+
+            prompts = [tokenizer.apply_chat_template(sample["prompt"], tokenize=False, add_generation_prompt=True) for sample in epoch]
+
+            # Kick off an eval on each engine
+            for eng_idx, llm in enumerate(engines):
+                try:
+                    seed = next(seed_iter)
+                except StopIteration:
+                    break
+                # Add exploration noise
+                ray.get(llm.collective_rpc.remote("perturb_self_weights", args=(seed, args.sigma, False)))
+                handle = generate(llm, prompts)
+                inflight[handle] = {
+                    "engine": llm,
+                    "engine_idx": eng_idx,
+                    "seed": seed,
+                }
+            
+            while inflight:
+                done, _ = ray.wait(list(inflight.keys()), num_returns=1)
+                h = done[0]
+
+                meta = inflight.pop(h)
+                outputs = ray.get(h)
+                metrics = _postprocess_outputs(outputs, epoch)
+                seeds_perf[meta["seed"]] = metrics
+                result_this_gen.append(
+                    {
+                        "seed": meta["seed"],
+                        "metrics": metrics,
+                    }
+                )
+
+                llm = meta["engine"]
+                # Remove exploration noise
+                ray.get(llm.collective_rpc.remote("restore_self_weights", args=(meta["seed"], args.sigma)))
+
+                print(f"Received results from engine {inflight[h]['engine_idx']}")
+                # Schedule next seed on this engine
+                try:
+                    next_seed = next(seed_iter)
+                except StopIteration:
+                    continue
+                    
+                ray.get(llm.collective_rpc.remote("perturb_self_weights", args=(next_seed, args.sigma, False)))
+                handle = generate(llm, prompts)
+                inflight[handle] = {
+                    "engine": llm,
+                    "engine_idx": meta["engine_idx"],
+                    "seed": next_seed,
+                }
+
+
+            all_avg_rewards = [v["avg_reward"] for v in seeds_perf.values()]
+            mean_reward = float(np.mean(all_avg_rewards)) if all_avg_rewards else 0.0
+            std_reward = float(np.std(all_avg_rewards)) if all_avg_rewards else 0.0
+            min_reward = float(np.min(all_avg_rewards)) if all_avg_rewards else 0.0
+            max_reward = float(np.max(all_avg_rewards)) if all_avg_rewards else 0.0
+            print(f"Mean reward: {mean_reward}, std: {std_reward}, min: {min_reward}, max: {max_reward}")
+
+            for k in seeds_perf:
+                seeds_perf[k]["norm_reward"] = (seeds_perf[k]["avg_reward"] - mean_reward) / (std_reward + 1e-8)
+
+            per_seed_coeffs = [
+                (seed, (args.alpha / args.population_size) * float(seeds_perf[seed]["norm_reward"]))
+                for seed in seeds
+            ]
+            handles = []
+            for seed, coeff in per_seed_coeffs:
+                # Use sigma_or_scale=1.0 so the applied scale is `coeff`
+                handles.append(engines[0].collective_rpc.remote("perturb_self_weights", args=(seed, coeff, False)))
+            ray.get([e.collective_rpc.remote("broadcast_all_weights", args=(0,)) for e in engines])
     cleanup()
 
 
