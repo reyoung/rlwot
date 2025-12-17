@@ -162,9 +162,7 @@ def _postprocess_outputs(outputs, samples):
     for output, sample in zip(outputs, samples):
         ground_truth:str = sample["ground_truth"]
         response = output.outputs[0].text
-        # print(response, ground_truth)
         ok, _ = dapo_verify(response, ground_truth)
-        # r = reward_function(response, data["numbers"], data["target"])
         rewards.append(float(ok))
     return {
         "rewards": rewards,
@@ -204,10 +202,12 @@ def main():
     dataset = load_dataset()
 
     launch_engines(args, model_save_dir, engines, pgs)
+    n_rollouts = 0
 
     for iteration in range(args.num_iterations):
         for epoch_id, epoch in enumerate(batch_loader(dataset, args.epoch_size)):
             seeds = [random.randint(0, 1_000_000) for _ in range(args.population_size)]
+            n_rollouts += len(seeds) + len(epoch)
             seeds_perf = {}
 
             seed_iter = iter(seeds)
@@ -271,7 +271,7 @@ def main():
             std_reward = float(np.std(all_avg_rewards)) if all_avg_rewards else 0.0
             min_reward = float(np.min(all_avg_rewards)) if all_avg_rewards else 0.0
             max_reward = float(np.max(all_avg_rewards)) if all_avg_rewards else 0.0
-            print(f"Mean reward: {mean_reward}, std: {std_reward}, min: {min_reward}, max: {max_reward}")
+            print(f"iteration={iteration} epoch={epoch_id} n_rollouts={n_rollouts} Mean reward: {mean_reward}, std: {std_reward}, min: {min_reward}, max: {max_reward}")
 
             for k in seeds_perf:
                 seeds_perf[k]["norm_reward"] = (seeds_perf[k]["avg_reward"] - mean_reward) / (std_reward + 1e-8)
