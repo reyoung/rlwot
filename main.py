@@ -23,7 +23,7 @@ def parse_args():
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-4B")
     parser.add_argument("--sigma", type=float, default=0.001)
     parser.add_argument("--alpha", type=float, default=0.0005)
-    parser.add_argument("--population_size", type=int, default=30)
+    parser.add_argument("--population_size", type=int, default=32)
     parser.add_argument("--num_engines", type=int, default=4)
     parser.add_argument("--cuda_devices", type=str, default="0,1,2,3")
     parser.add_argument("--seed", type=int, default=42)
