@@ -309,6 +309,7 @@ def main():
                 f"iteration={iteration} epoch={epoch_id} n_rollouts={n_rollouts} Mean reward: {mean_reward}, std: {std_reward}, min: {min_reward}, max: {max_reward}"
             )
 
+            # z-score normalize the rewards
             for k in seeds_perf:
                 seeds_perf[k]["norm_reward"] = (
                     seeds_perf[k]["avg_reward"] - mean_reward
