@@ -21,8 +21,7 @@ COPY pyproject.toml ./
 COPY README.md ./
 
 # Install dependencies (this layer will be cached unless pyproject.toml changes)
-RUN --mount=type=cache,target=/root/.cache/uv \
-    mkdir -p rlwot && \
+RUN mkdir -p rlwot && \
     touch rlwot/__init__.py && \
     uv pip install --system -e .
 
