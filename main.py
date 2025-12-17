@@ -12,34 +12,40 @@ import torch
 import ray
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import datasets
+from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
+from vllm import LLM
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_name", type=str, default='Qwen/Qwen3-4B')
+    parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-4B")
     parser.add_argument("--sigma", type=float, default=0.001)
     parser.add_argument("--alpha", type=float, default=0.0005)
     parser.add_argument("--polulation_size", type=int, default=30)
     parser.add_argument("--num_engines", type=int, default=4)
-    parser.add_argument("--cuda_devices", type=str, default='0,1,2,3')
+    parser.add_argument("--cuda_devices", type=str, default="0,1,2,3")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--experiment_dir", type=str, default=os.path.expanduser('~/experiments'))
+    parser.add_argument(
+        "--experiment_dir", type=str, default=os.path.expanduser("~/experiments")
+    )
 
     args = parser.parse_args()
     os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_devices
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    args.experiment_dir = os.path.join(args.experiment_dir, f"{args.model_name.replace('/', '---')}"
-                                       "dapo_math", datetime.now().strftime('%Y%m%d_%H%M%S'))
+    args.experiment_dir = os.path.join(
+        args.experiment_dir,
+        f"{args.model_name.replace('/', '---')}dapo_math",
+        datetime.now().strftime("%Y%m%d_%H%M%S"),
+    )
 
     return args
 
+
 def save_base_model(args: argparse.Namespace, model_save_dir: str):
     base_model = AutoModelForCausalLM.from_pretrained(
-        args.model_name,
-        dtype=torch.float16,
-        device_map="cpu",
-        trust_remote_code=True
+        args.model_name, dtype=torch.float16, device_map="cpu", trust_remote_code=True
     )
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
     base_model_dir = os.path.join(model_save_dir, "base_model")
@@ -51,17 +57,71 @@ def save_base_model(args: argparse.Namespace, model_save_dir: str):
     del base_model
     gc.collect()
 
+
 def _map_dapo_math(example):
     return {
         "prompt": example["prompt"],
         "ground_truth": example["reward_model"]["ground_truth"],
-        "index": example["extra_info"]["index"]
+        "index": example["extra_info"]["index"],
     }
 
+
 def load_dataset():
-    train_dataset: datasets.Dataset = datasets.load_dataset("BytedTsinghua-SIA/DAPO-Math-17k")["train"]
+    train_dataset: datasets.Dataset = datasets.load_dataset(
+        "BytedTsinghua-SIA/DAPO-Math-17k"
+    )["train"]
     train_dataset = train_dataset.map(_map_dapo_math)
     return train_dataset
+
+
+class MyLLM(LLM):
+    def __init__(self, *args, **kwargs):
+        # Let Ray/PG determine the actual visible device in the actor
+        os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+        super().__init__(*args, **kwargs)
+
+
+def launch_engines(args: argparse.Namespace, engines: list, pgs: list):
+    assert len(pgs) == 0
+    assert len(engines) == 0
+    pgs.extend(
+        (
+            ray.util.placement_group(
+                [
+                    {
+                        "GPU": 1,
+                        "CPU": 0,
+                    }
+                ]
+            )
+            for _ in range(args.num_engines)
+        )
+    )
+    strategies = [
+        PlacementGroupSchedulingStrategy(
+            placement_group=pg,
+            placement_group_capture_child_tasks=True,
+            placement_group_bundle_index=0,
+        )
+        for pg in pgs
+    ]
+    engines.extend(
+        (
+            ray.remote(num_cpus=0, num_gpus=0, scheduling_strategy=strategy)(
+                MyLLM
+            ).remote(
+                model=args.model_name,
+                tensor_parallel_size=1,
+                distributed_executor_backend="ray",
+                worker_extension_cls="worker_extn.WorkerExtension",
+                dtype="float16",
+                enable_prefix_caching=False,
+                enforce_eager=False,
+            )
+            for strategy in strategies
+        )
+    )
+
 
 def main():
     args = parse_args()
@@ -95,8 +155,9 @@ def main():
 
     dataset = load_dataset()
 
-    cleanup()
+    launch_engines(args, engines, pgs)
 
+    cleanup()
 
 
 if __name__ == "__main__":
