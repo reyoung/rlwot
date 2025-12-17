@@ -38,6 +38,7 @@ def save_base_model(args: argparse.Namespace, model_save_dir: str):
     base_model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
         torch_dtype=torch.float16,
+        dtype=torch.float16,
         device_map="cpu",
         trust_remote_code=True
     )
