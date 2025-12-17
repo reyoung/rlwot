@@ -81,7 +81,7 @@ class MyLLM(LLM):
         super().__init__(*args, **kwargs)
 
 
-def launch_engines(args: argparse.Namespace, engines: list, pgs: list):
+def launch_engines(args: argparse.Namespace, model_path: str, engines: list, pgs: list):
     assert len(pgs) == 0
     assert len(engines) == 0
     pgs.extend(
@@ -155,7 +155,7 @@ def main():
 
     dataset = load_dataset()
 
-    launch_engines(args, engines, pgs)
+    launch_engines(args, model_save_dir, engines, pgs)
 
     cleanup()
 
