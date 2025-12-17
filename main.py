@@ -18,6 +18,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-4B")
@@ -32,7 +33,6 @@ def parse_args():
     )
     parser.add_argument("--num_iterations", type=int, default=1)
     parser.add_argument("--epoch_size", type=int, default=32)
-
 
     args = parser.parse_args()
     os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_devices
@@ -138,12 +138,16 @@ def launch_engines(args: argparse.Namespace, model_path: str, engines: list, pgs
 
     master_address = "127.0.0.1"
     master_port = 56789
-    ray.get([
-        engines[i].collective_rpc.remote(
-            "init_inter_engine_group", args=(master_address, master_port, i, args.num_engines)
-        )
-        for i in range(args.num_engines)
-    ])
+    ray.get(
+        [
+            engines[i].collective_rpc.remote(
+                "init_inter_engine_group",
+                args=(master_address, master_port, i, args.num_engines),
+            )
+            for i in range(args.num_engines)
+        ]
+    )
+
 
 def batch_loader(dataset, batch_size):
     batch = []
@@ -152,9 +156,10 @@ def batch_loader(dataset, batch_size):
         if len(batch) == batch_size:
             yield batch
             batch.clear()
-    
+
     if batch:
         yield batch
+
 
 def generate(llm, prompts: list[str]):
     sampling_params = SamplingParams(
@@ -165,10 +170,11 @@ def generate(llm, prompts: list[str]):
     handle = llm.generate.remote(prompts, sampling_params, use_tqdm=False)
     return handle
 
+
 def _postprocess_outputs(outputs, samples):
     rewards = []
     for output, sample in zip(outputs, samples):
-        ground_truth:str = sample["ground_truth"]
+        ground_truth: str = sample["ground_truth"]
         response = output.outputs[0].text
         ok, _ = dapo_verify(response, ground_truth)
         rewards.append(float(ok))
@@ -176,6 +182,7 @@ def _postprocess_outputs(outputs, samples):
         "rewards": rewards,
         "avg_reward": float(np.mean(rewards)) if rewards else 0.0,
     }
+
 
 def main():
     args = parse_args()
@@ -222,7 +229,12 @@ def main():
             inflight = {}
             results_this_gen = []
 
-            prompts = [tokenizer.apply_chat_template(sample["prompt"], tokenize=False, add_generation_prompt=True) for sample in epoch]
+            prompts = [
+                tokenizer.apply_chat_template(
+                    sample["prompt"], tokenize=False, add_generation_prompt=True
+                )
+                for sample in epoch
+            ]
 
             # Kick off an eval on each engine
             for eng_idx, llm in enumerate(engines):
@@ -231,14 +243,18 @@ def main():
                 except StopIteration:
                     break
                 # Add exploration noise
-                ray.get(llm.collective_rpc.remote("perturb_self_weights", args=(seed, args.sigma, False)))
+                ray.get(
+                    llm.collective_rpc.remote(
+                        "perturb_self_weights", args=(seed, args.sigma, False)
+                    )
+                )
                 handle = generate(llm, prompts)
                 inflight[handle] = {
                     "engine": llm,
                     "engine_idx": eng_idx,
                     "seed": seed,
                 }
-            
+
             while inflight:
                 done, _ = ray.wait(list(inflight.keys()), num_returns=1)
                 h = done[0]
@@ -256,16 +272,26 @@ def main():
 
                 llm = meta["engine"]
                 # Remove exploration noise
-                ray.get(llm.collective_rpc.remote("restore_self_weights", args=(meta["seed"], args.sigma)))
+                ray.get(
+                    llm.collective_rpc.remote(
+                        "restore_self_weights", args=(meta["seed"], args.sigma)
+                    )
+                )
 
-                logger.info(f"received results from engine {meta['engine_idx']}, {results_this_gen[-1]}")
+                logger.info(
+                    f"received results from engine {meta['engine_idx']}, {results_this_gen[-1]}"
+                )
                 # Schedule next seed on this engine
                 try:
                     next_seed = next(seed_iter)
                 except StopIteration:
                     continue
-                    
-                ray.get(llm.collective_rpc.remote("perturb_self_weights", args=(next_seed, args.sigma, False)))
+
+                ray.get(
+                    llm.collective_rpc.remote(
+                        "perturb_self_weights", args=(next_seed, args.sigma, False)
+                    )
+                )
                 handle = generate(llm, prompts)
                 inflight[handle] = {
                     "engine": llm,
@@ -273,26 +299,51 @@ def main():
                     "seed": next_seed,
                 }
 
-
             all_avg_rewards = [v["avg_reward"] for v in seeds_perf.values()]
             mean_reward = float(np.mean(all_avg_rewards)) if all_avg_rewards else 0.0
             std_reward = float(np.std(all_avg_rewards)) if all_avg_rewards else 0.0
             min_reward = float(np.min(all_avg_rewards)) if all_avg_rewards else 0.0
             max_reward = float(np.max(all_avg_rewards)) if all_avg_rewards else 0.0
-            logger.info(f"iteration={iteration} epoch={epoch_id} n_rollouts={n_rollouts} Mean reward: {mean_reward}, std: {std_reward}, min: {min_reward}, max: {max_reward}")
+            logger.info(
+                f"iteration={iteration} epoch={epoch_id} n_rollouts={n_rollouts} Mean reward: {mean_reward}, std: {std_reward}, min: {min_reward}, max: {max_reward}"
+            )
 
             for k in seeds_perf:
-                seeds_perf[k]["norm_reward"] = (seeds_perf[k]["avg_reward"] - mean_reward) / (std_reward + 1e-8)
+                seeds_perf[k]["norm_reward"] = (
+                    seeds_perf[k]["avg_reward"] - mean_reward
+                ) / (std_reward + 1e-8)
 
             per_seed_coeffs = [
-                (seed, (args.alpha / args.population_size) * float(seeds_perf[seed]["norm_reward"]))
+                (
+                    seed,
+                    (args.alpha / args.population_size)
+                    * float(seeds_perf[seed]["norm_reward"]),
+                )
                 for seed in seeds
             ]
             handles = []
             for seed, coeff in per_seed_coeffs:
                 # Use sigma_or_scale=1.0 so the applied scale is `coeff`
-                handles.append(engines[0].collective_rpc.remote("perturb_self_weights", args=(seed, coeff, False)))
-            ray.get([e.collective_rpc.remote("broadcast_all_weights", args=(0,)) for e in engines])
+                handles.append(
+                    engines[0].collective_rpc.remote(
+                        "perturb_self_weights", args=(seed, coeff, False)
+                    )
+                )
+            ray.get(
+                [
+                    e.collective_rpc.remote("broadcast_all_weights", args=(0,))
+                    for e in engines
+                ]
+            )
+
+        final_model_path = f"{model_save_dir}/iteration_{args.num_iterations}"
+        os.makedirs(final_model_path, exist_ok=True)
+        ray.get(
+            engines[0].collective_rpc.remote(
+                "save_self_weights_to_disk",
+                args=(f"{final_model_path}/pytorch_model.pth",),
+            )
+        )
 
     cleanup()
 
