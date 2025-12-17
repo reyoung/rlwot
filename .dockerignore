@@ -1,24 +1,12 @@
 # Python
-*.pyc
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
+dist/
+build/
 *.egg
 
 # Virtual environments
@@ -28,19 +16,39 @@ ENV/
 env/
 
 # IDEs
-.zed
 .vscode/
 .idea/
+.zed/
 *.swp
 *.swo
 *~
 
+# Git
+.git/
+.gitignore
+
 # Project specific
-lora
+lora/
 ckpt/
 my_ckpt/
 experiments/
 
+# Documentation
+*.md
+!README.md
+
+# Test files
+test_*.py
+*_test.py
+tests/
+
 # OS
 .DS_Store
 Thumbs.db
+
+# Logs
+*.log
+
+# Other
+.env
+.env.*
