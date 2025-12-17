@@ -6,7 +6,6 @@ import random
 import shutil
 import signal
 import sys
-import typing
 import numpy as np
 import torch
 import ray
@@ -14,9 +13,10 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import datasets
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from vllm import LLM, SamplingParams
-import torch
 from dapo_utils import verify as dapo_verify
+import logging
 
+logger = logging.getLogger(__name__)
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -43,6 +43,14 @@ def parse_args():
         args.experiment_dir,
         f"{args.model_name.replace('/', '---')}dapo_math",
         datetime.now().strftime("%Y%m%d_%H%M%S"),
+    )
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.FileHandler(os.path.join(args.experiment_dir, "run.log")),
+            logging.StreamHandler(sys.stderr),
+        ],
     )
 
     return args
@@ -250,7 +258,7 @@ def main():
                 # Remove exploration noise
                 ray.get(llm.collective_rpc.remote("restore_self_weights", args=(meta["seed"], args.sigma)))
 
-                print(f"Received results from engine {meta['engine_idx']}, {results_this_gen[-1]}")
+                logger.info(f"received results from engine {meta['engine_idx']}, {results_this_gen[-1]}")
                 # Schedule next seed on this engine
                 try:
                     next_seed = next(seed_iter)
@@ -271,7 +279,7 @@ def main():
             std_reward = float(np.std(all_avg_rewards)) if all_avg_rewards else 0.0
             min_reward = float(np.min(all_avg_rewards)) if all_avg_rewards else 0.0
             max_reward = float(np.max(all_avg_rewards)) if all_avg_rewards else 0.0
-            print(f"iteration={iteration} epoch={epoch_id} n_rollouts={n_rollouts} Mean reward: {mean_reward}, std: {std_reward}, min: {min_reward}, max: {max_reward}")
+            logger.info(f"iteration={iteration} epoch={epoch_id} n_rollouts={n_rollouts} Mean reward: {mean_reward}, std: {std_reward}, min: {min_reward}, max: {max_reward}")
 
             for k in seeds_perf:
                 seeds_perf[k]["norm_reward"] = (seeds_perf[k]["avg_reward"] - mean_reward) / (std_reward + 1e-8)
