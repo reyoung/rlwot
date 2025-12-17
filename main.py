@@ -23,7 +23,7 @@ def parse_args():
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-4B")
     parser.add_argument("--sigma", type=float, default=0.001)
     parser.add_argument("--alpha", type=float, default=0.0005)
-    parser.add_argument("--polulation_size", type=int, default=30)
+    parser.add_argument("--population_size", type=int, default=30)
     parser.add_argument("--num_engines", type=int, default=4)
     parser.add_argument("--cuda_devices", type=str, default="0,1,2,3")
     parser.add_argument("--seed", type=int, default=42)
@@ -162,6 +162,7 @@ def _postprocess_outputs(outputs, samples):
     for output, sample in zip(outputs, samples):
         ground_truth:str = sample["ground_truth"]
         response = output.outputs[0].text
+        print(response, ground_truth)
         ok, _ = dapo_verify(response, ground_truth)
         # r = reward_function(response, data["numbers"], data["target"])
         rewards.append(float(ok))
@@ -206,7 +207,7 @@ def main():
 
     for iteration in range(args.num_iterations):
         for epoch_id, epoch in enumerate(batch_loader(dataset, args.epoch_size)):
-            seeds = [random.randint(0, 1_000_000) for _ in range(args.polulation_size)]
+            seeds = [random.randint(0, 1_000_000) for _ in range(args.population_size)]
             seeds_perf = {}
 
             seed_iter = iter(seeds)
