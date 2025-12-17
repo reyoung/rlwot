@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDEs
+.vscode/
+.idea/
+.zed/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# Project specific
+lora/
+ckpt/
+my_ckpt/
+experiments/
+
+# Documentation
+*.md
+!README.md
+
+# Test files
+test_*.py
+*_test.py
+tests/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Other
+.env
+.env.*
