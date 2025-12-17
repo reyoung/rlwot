@@ -22,7 +22,7 @@ def parse_args():
     parser.add_argument("--num_engines", type=int, default=4)
     parser.add_argument("--cuda_devices", type=str, default='0,1,2,3')
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--experiment_dir", type=str, default='./experiments')
+    parser.add_argument("--experiment_dir", type=str, default=os.path.expanduser('~/experiments'))
 
     args = parser.parse_args()
     os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_devices
