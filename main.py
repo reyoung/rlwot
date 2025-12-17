@@ -211,7 +211,7 @@ def main():
 
             seed_iter = iter(seeds)
             inflight = {}
-            result_this_gen = []
+            results_this_gen = []
 
             prompts = [tokenizer.apply_chat_template(sample["prompt"], tokenize=False, add_generation_prompt=True) for sample in epoch]
 
@@ -238,7 +238,7 @@ def main():
                 outputs = ray.get(h)
                 metrics = _postprocess_outputs(outputs, epoch)
                 seeds_perf[meta["seed"]] = metrics
-                result_this_gen.append(
+                results_this_gen.append(
                     {
                         "seed": meta["seed"],
                         "metrics": metrics,
@@ -249,7 +249,7 @@ def main():
                 # Remove exploration noise
                 ray.get(llm.collective_rpc.remote("restore_self_weights", args=(meta["seed"], args.sigma)))
 
-                print(f"Received results from engine {inflight[h]['engine_idx']}")
+                print(f"Received results from engine {meta['engine_idx']}, {results_this_gen[-1]}")
                 # Schedule next seed on this engine
                 try:
                     next_seed = next(seed_iter)
