@@ -159,8 +159,8 @@ def generate(llm, prompts: list[str]):
 
 def _postprocess_outputs(outputs, samples):
     rewards = []
-    for output, data in zip(outputs, samples):
-        ground_truth:str = samples["ground_truth"]
+    for output, sample in zip(outputs, samples):
+        ground_truth:str = sample["ground_truth"]
         response = output.outputs[0].text
         ok, _ = dapo_verify(response, ground_truth)
         # r = reward_function(response, data["numbers"], data["target"])
