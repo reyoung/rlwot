@@ -1,0 +1,10 @@
+[project]
+name = "rlwot"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "ray>=2.52.1",
+    "vllm>=0.12.0",
+]
