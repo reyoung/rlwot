@@ -14,7 +14,6 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import datasets
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from vllm import LLM
-from vllm.utils import get_ip, get_open_port
 
 
 def parse_args():
@@ -123,8 +122,8 @@ def launch_engines(args: argparse.Namespace, model_path: str, engines: list, pgs
         )
     )
 
-    master_address = get_ip()
-    master_port = get_open_port()
+    master_address = "127.0.0.1"
+    master_port = "56789"
     ray.get([
         engines[i].collective_rpc.remote(
             "init_inter_engine_group", args=(master_address, master_port, i, args.num_engines)
