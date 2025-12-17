@@ -152,7 +152,7 @@ def generate(llm, prompts: list[str]):
     sampling_params = SamplingParams(
         temperature=0.0,
         seed=42,
-        max_tokens=1024,
+        max_tokens=4096,
     )
     handle = llm.generate.remote(prompts, sampling_params, use_tqdm=False)
     return handle
@@ -162,7 +162,7 @@ def _postprocess_outputs(outputs, samples):
     for output, sample in zip(outputs, samples):
         ground_truth:str = sample["ground_truth"]
         response = output.outputs[0].text
-        print(response, ground_truth)
+        # print(response, ground_truth)
         ok, _ = dapo_verify(response, ground_truth)
         # r = reward_function(response, data["numbers"], data["target"])
         rewards.append(float(ok))
