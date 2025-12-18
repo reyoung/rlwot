@@ -3,7 +3,7 @@ name = "rlwot"
 version = "0.1.0"
 description = "Reinforcement Learning with Optimization Techniques"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
     "accelerate>=1.12.0",
     "datasets>=4.4.1",
