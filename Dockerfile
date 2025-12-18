@@ -23,7 +23,7 @@ COPY README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     mkdir -p rlwot && \
     touch rlwot/__init__.py && \
-    pip install --system -e .
+    pip install -e .
 
 RUN <<EOF cat >> /etc/security/limits.conf
 * soft memlock unlimited
