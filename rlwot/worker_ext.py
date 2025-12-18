@@ -3,7 +3,6 @@ import time
 import torch
 import vllm.distributed.parallel_state as ps
 import vllm.utils.network_utils as net_utils
-import traceback
 
 def _stateless_init_process_group(master_address, master_port, rank, world_size, device):
     from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
