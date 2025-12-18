@@ -163,7 +163,7 @@ def launch_engines(args: argparse.Namespace, model_path: str, engines: list, pgs
     )
 
     master_address = "127.0.0.1"
-    master_port = 56789
+    master_port = 57789
     ray.get(
         [
             engines[i].collective_rpc.remote(
