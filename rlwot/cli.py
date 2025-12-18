@@ -94,7 +94,7 @@ def save_base_model(args: argparse.Namespace, model_save_dir: str):
     base_model.save_pretrained(base_model_dir)
     del base_model
     gc.collect()
-    return tokenizer
+    return tokenizer, base_model_dir
 
 
 def _map_dapo_math(example):
@@ -237,11 +237,11 @@ def main():
 
     model_save_dir = os.path.join(args.experiment_dir, "models")
 
-    tokenizer = save_base_model(args, model_save_dir)
+    tokenizer, base_model_dir = save_base_model(args, model_save_dir)
 
     dataset = load_dataset()
 
-    launch_engines(args, model_save_dir, engines, pgs)
+    launch_engines(args, base_model_dir, engines, pgs)
     n_rollouts = 0
 
     for iteration in range(args.num_iterations):
