@@ -119,6 +119,7 @@ class MyLLM(LLM):
     def __init__(self, *args, **kwargs):
         # Let Ray/PG determine the actual visible device in the actor
         os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+        os.environ["NCCL_DEBUG"] = "INFO"
         super().__init__(*args, **kwargs)
 
 
