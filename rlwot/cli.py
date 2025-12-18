@@ -162,6 +162,16 @@ def launch_engines(args: argparse.Namespace, model_path: str, engines: list, pgs
         )
     )
 
+    ip_ports = ray.get([engines[0].collective_rpc.remote(
+            "get_ip_port",
+            args=(rank_idx),
+        ) for rank_idx in range(args.tp_size)])
+    
+    for rank_idx, ip_port in enumerate(ip_ports):
+        logger.info(f"rank idx {rank_idx} master ip_port: {ip_port[rank_idx]}")
+
+    
+
     master_address = "127.0.0.1"
     master_port = 57789
     ranks = ray.get(

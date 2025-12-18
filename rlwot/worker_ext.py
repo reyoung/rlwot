@@ -2,6 +2,7 @@ import gc
 import time
 import torch
 import vllm.distributed.parallel_state as ps
+import vllm.utils.network_utils as net_utils
 import traceback
 
 def _stateless_init_process_group(master_address, master_port, rank, world_size, device):
@@ -48,6 +49,13 @@ class WorkerExtension:
             torch.cuda.synchronize()
         torch.cuda.empty_cache()
         return True
+
+    def get_ip_port(self, rank: int) -> tuple[str, int] | None:
+        if rank != ps.get_world_group().rank:
+            return None
+        else:
+            return net_utils.get_ip(), net_utils.get_open_port()
+
 
     def init_inter_engine_group(self, master_address: str, master_port: int, rank: int, world_size: int):
         print(f"init_inter_engine_group tp_rank={ps.get_tp_group().rank} tp_size={ps.get_tp_group().world_size} rank={rank} world_size={world_size} type={type(self)}")
