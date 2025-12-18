@@ -128,9 +128,10 @@ def launch_engines(args: argparse.Namespace, model_path: str, engines: list, pgs
             ray.util.placement_group(
                 [
                     {
-                        "GPU": args.tp_size,
+                        "GPU": 1,
                         "CPU": 0,
                     }
+                    for _ in range(args.tp_size)
                 ]
             )
             for _ in range(args.num_engines)
