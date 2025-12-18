@@ -2,6 +2,7 @@ import gc
 import time
 import torch
 import vllm.distributed.parallel_state as ps
+import traceback
 
 def _stateless_init_process_group(master_address, master_port, rank, world_size, device):
     from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
@@ -50,6 +51,7 @@ class WorkerExtension:
 
     def init_inter_engine_group(self, master_address: str, master_port: int, rank: int, world_size: int):
         print(f"init_inter_engine_group tp_rank={ps.get_tp_group().rank} tp_size={ps.get_tp_group().world_size}")
+        traceback.print_stack()
         # time.sleep(10)
         # self.inter_pg = _stateless_init_process_group(
             # master_address, master_port, rank, world_size, self.device
