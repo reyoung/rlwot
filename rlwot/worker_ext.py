@@ -57,14 +57,12 @@ class WorkerExtension:
             return net_utils.get_ip(), net_utils.get_open_port()
 
 
-    def init_inter_engine_group(self, master_address: str, master_port: int, rank: int, world_size: int):
-        print(f"init_inter_engine_group tp_rank={ps.get_tp_group().rank} tp_size={ps.get_tp_group().world_size} rank={rank} world_size={world_size} type={type(self)}")
-        traceback.print_stack()
-        # time.sleep(10)
-        # self.inter_pg = _stateless_init_process_group(
-            # master_address, master_port, rank, world_size, self.device
-        # )
-        return ps.get_tp_group().rank
+    def init_inter_engine_group(self, ip_ports: list[tuple[str, int]], rank: int, world_size: int):
+        ip, port = ip_ports[ps.get_world_group().rank]
+        self.inter_pg = _stateless_init_process_group(
+            ip, port, rank, world_size, self.device
+        )
+        return True
 
     def broadcast_all_weights(self, src_rank: int):
         for _, p in self.model_runner.model.named_parameters():

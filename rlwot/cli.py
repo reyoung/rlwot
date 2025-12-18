@@ -173,17 +173,16 @@ def launch_engines(args: argparse.Namespace, model_path: str, engines: list, pgs
             for rank_idx in range(args.tp_size)
         ]
     )
+    ip_ports: list[tuple[str, int]] = [ip_port[rank_idx] for rank_idx, ip_port in enumerate(ip_ports)] # type: ignore
 
     for rank_idx, ip_port in enumerate(ip_ports):
         logger.info(f"rank idx {rank_idx} master ip_port: {ip_port[rank_idx]}")
 
-    master_address = "127.0.0.1"
-    master_port = 57789
     ranks = ray.get(
         [
             engines[i].collective_rpc.remote(
                 "init_inter_engine_group",
-                args=(master_address, master_port, i, args.num_engines),
+                args=(ip_ports, i, args.num_engines),
             )
             for i in range(args.num_engines)
         ]
