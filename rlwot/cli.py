@@ -44,12 +44,14 @@ def parse_args():
     parser.add_argument("--swanlab_group", type=str, default=None, required=False)
     parser.add_argument("--swanlab_name", type=str, default=None, required=False)
     parser.add_argument("--use_swanlab", action="store_true", default=False)
-    
+
     parser.add_argument("--tp_size", type=int, default=1, help="Tensor parallel size.")
 
     args = parser.parse_args()
     n_gpus = len(args.cuda_devices.split(","))
-    assert args.num_engines * args.tp_size == n_gpus, "num_engines * tp_size must equal n_gpus"
+    assert args.num_engines * args.tp_size == n_gpus, (
+        "num_engines * tp_size must equal n_gpus"
+    )
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_devices
     random.seed(args.seed)
@@ -162,15 +164,18 @@ def launch_engines(args: argparse.Namespace, model_path: str, engines: list, pgs
         )
     )
 
-    ip_ports = ray.get([engines[0].collective_rpc.remote(
-            "get_ip_port",
-            args=(rank_idx),
-        ) for rank_idx in range(args.tp_size)])
-    
+    ip_ports = ray.get(
+        [
+            engines[0].collective_rpc.remote(
+                "get_ip_port",
+                args=(rank_idx, ),
+            )
+            for rank_idx in range(args.tp_size)
+        ]
+    )
+
     for rank_idx, ip_port in enumerate(ip_ports):
         logger.info(f"rank idx {rank_idx} master ip_port: {ip_port[rank_idx]}")
-
-    
 
     master_address = "127.0.0.1"
     master_port = 57789
