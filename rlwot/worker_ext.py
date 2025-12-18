@@ -22,33 +22,26 @@ class WorkerExtension:
     - broadcast_all_weights(src_rank)
     - save_self_weights_to_disk(filepath)
     """
+    def _apply_noise_to_weights(self, seed, scale):
+        gen = torch.Generator(device=self.device)
+        seed += ps.get_tp_group().rank  # make sure different tp ranks have different noise
+        gen.manual_seed(int(seed))
+        for _, p in self.model_runner.model.named_parameters():
+            noise = torch.randn(p.shape, dtype=p.dtype, device=p.device, generator=gen)
+            p.data.add_(scale * noise)
+            del noise
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+
 
     def perturb_self_weights(self, seed, noise_scale, negate=False):
-        print(f"perturb_self_weights tp_rank={ps.get_tp_group().rank} tp_size={ps.get_tp_group().world_size}")
         scale = float(noise_scale)
         sign = -1.0 if negate else 1.0
-        gen = torch.Generator(device=self.device)
-        gen.manual_seed(int(seed))
-        for _, p in self.model_runner.model.named_parameters():
-            noise = torch.randn(p.shape, dtype=p.dtype, device=p.device, generator=gen)
-            p.data.add_(sign * scale * noise)
-            del noise
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        torch.cuda.empty_cache()
-        return True
+        return self._apply_noise_to_weights(seed, scale * sign)
 
     def restore_self_weights(self, seed, SIGMA):
-        gen = torch.Generator(device=self.device)
-        gen.manual_seed(int(seed))
-        for _, p in self.model_runner.model.named_parameters():
-            noise = torch.randn(p.shape, dtype=p.dtype, device=p.device, generator=gen)
-            p.data.add_(-float(SIGMA) * noise)
-            del noise
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        torch.cuda.empty_cache()
-        return True
+        self._apply_noise_to_weights(seed, -float(SIGMA))
 
     def get_ip_port(self, rank: int) -> tuple[str, int] | None:
         if rank != ps.get_world_group().rank:
