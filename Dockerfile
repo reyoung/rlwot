@@ -26,6 +26,15 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     touch rlwot/__init__.py && \
     uv pip install --system -e .
 
+RUN <<EOF cat >> /etc/security/limits.conf
+* soft memlock unlimited
+* hard memlock unlimited
+* soft core unlimited
+* hard core unlimited
+* soft nofile unlimited
+* hard nofile unlimited
+EOF
+
 # Copy source code (changes here won't invalidate dependency layer)
 COPY rlwot ./rlwot/
 
