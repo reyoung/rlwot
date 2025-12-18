@@ -1,6 +1,7 @@
 import gc
 import time
 import torch
+import vllm.distributed.parallel_state as ps
 
 def _stateless_init_process_group(master_address, master_port, rank, world_size, device):
     from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
@@ -21,6 +22,7 @@ class WorkerExtension:
     """
 
     def perturb_self_weights(self, seed, noise_scale, negate=False):
+        print(f"perturb_self_weights tp_rank={ps.get_tp_group().rank} tp_size={ps.get_tp_group().world_size}")
         scale = float(noise_scale)
         sign = -1.0 if negate else 1.0
         gen = torch.Generator(device=self.device)
