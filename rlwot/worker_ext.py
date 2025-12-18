@@ -56,7 +56,7 @@ class WorkerExtension:
         # self.inter_pg = _stateless_init_process_group(
             # master_address, master_port, rank, world_size, self.device
         # )
-        return True
+        return ps.get_tp_group().rank
 
     def broadcast_all_weights(self, src_rank: int):
         for _, p in self.model_runner.model.named_parameters():

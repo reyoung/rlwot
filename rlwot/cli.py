@@ -164,7 +164,7 @@ def launch_engines(args: argparse.Namespace, model_path: str, engines: list, pgs
 
     master_address = "127.0.0.1"
     master_port = 57789
-    ray.get(
+    ranks = ray.get(
         [
             engines[i].collective_rpc.remote(
                 "init_inter_engine_group",
@@ -173,6 +173,7 @@ def launch_engines(args: argparse.Namespace, model_path: str, engines: list, pgs
             for i in range(args.num_engines)
         ]
     )
+    logger.info("ranks %s", ranks)
 
 
 def batch_loader(dataset, batch_size):
