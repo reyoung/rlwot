@@ -37,6 +37,7 @@ def parse_args():
     parser.add_argument(
         "--experiment_dir", type=str, default=os.path.expanduser("~/experiments")
     )
+    parser.add_argument("--gpu_memory_utilization", type=float, default=0.85)
     parser.add_argument("--num_iterations", type=int, default=1)
     parser.add_argument("--epoch_size", type=int, default=32)
     parser.add_argument("--swanlab_project", type=str, default=None, required=False)
@@ -160,6 +161,7 @@ def launch_engines(args: argparse.Namespace, model_path: str, engines: list, pgs
                 enable_prefix_caching=False,
                 enforce_eager=False,
                 tensor_parallel_size=args.tp_size,
+                gpu_memory_utilization=args.gpu_memory_utilization,
             )
             for strategy in strategies
         )
