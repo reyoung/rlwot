@@ -45,7 +45,14 @@ def parse_args():
     parser.add_argument("--swanlab_name", type=str, default=None, required=False)
     parser.add_argument("--use_swanlab", action="store_true", default=False)
 
+    parser.add_argument("--tp_size", type=int, default=1, help="Tensor parallel size.")
+
     args = parser.parse_args()
+    n_gpus = len(args.cuda_devices.split(","))
+    assert args.num_engines * args.tp_size == n_gpus, (
+        "num_engines * tp_size must equal n_gpus"
+    )
+
     os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_devices
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -89,7 +96,7 @@ def save_base_model(args: argparse.Namespace, model_save_dir: str):
     base_model.save_pretrained(base_model_dir)
     del base_model
     gc.collect()
-    return tokenizer
+    return tokenizer, base_model_dir
 
 
 def _map_dapo_math(example):
@@ -126,6 +133,7 @@ def launch_engines(args: argparse.Namespace, model_path: str, engines: list, pgs
                         "GPU": 1,
                         "CPU": 0,
                     }
+                    for _ in range(args.tp_size)
                 ]
             )
             for _ in range(args.num_engines)
@@ -144,29 +152,42 @@ def launch_engines(args: argparse.Namespace, model_path: str, engines: list, pgs
             ray.remote(num_cpus=0, num_gpus=0, scheduling_strategy=strategy)(
                 MyLLM
             ).remote(
-                model=args.model_name,
-                tensor_parallel_size=1,
+                model=model_path,
                 distributed_executor_backend="ray",
                 worker_extension_cls="rlwot.worker_ext.WorkerExtension",
                 dtype="float16",
                 enable_prefix_caching=False,
                 enforce_eager=False,
+                tensor_parallel_size=args.tp_size,
             )
             for strategy in strategies
         )
     )
 
-    master_address = "127.0.0.1"
-    master_port = 56789
-    ray.get(
+    ip_ports = ray.get(
+        [
+            engines[0].collective_rpc.remote(
+                "get_ip_port",
+                args=(rank_idx, ),
+            )
+            for rank_idx in range(args.tp_size)
+        ]
+    )
+    ip_ports: list[tuple[str, int]] = [ip_port[rank_idx] for rank_idx, ip_port in enumerate(ip_ports)] # type: ignore
+
+    for rank_idx, ip_port in enumerate(ip_ports):
+        logger.info(f"rank idx {rank_idx} master ip_port: {ip_port[rank_idx]}")
+
+    ranks = ray.get(
         [
             engines[i].collective_rpc.remote(
                 "init_inter_engine_group",
-                args=(master_address, master_port, i, args.num_engines),
+                args=(ip_ports, i, args.num_engines),
             )
             for i in range(args.num_engines)
         ]
     )
+    logger.info("ranks %s", ranks)
 
 
 def batch_loader(dataset, batch_size):
@@ -232,11 +253,11 @@ def main():
 
     model_save_dir = os.path.join(args.experiment_dir, "models")
 
-    tokenizer = save_base_model(args, model_save_dir)
+    tokenizer, base_model_dir = save_base_model(args, model_save_dir)
 
     dataset = load_dataset()
 
-    launch_engines(args, model_save_dir, engines, pgs)
+    launch_engines(args, base_model_dir, engines, pgs)
     n_rollouts = 0
 
     for iteration in range(args.num_iterations):
