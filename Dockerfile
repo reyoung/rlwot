@@ -1,5 +1,4 @@
-# Use the official uv image as base
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+FROM nvcr.io/nvidia/pytorch:2.9.0-cuda12.8-cudnn9-runtime
 
 # Set working directory
 WORKDIR /app
@@ -24,7 +23,7 @@ COPY README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     mkdir -p rlwot && \
     touch rlwot/__init__.py && \
-    uv pip install --system -e .
+    pip install --system -e .
 
 RUN <<EOF cat >> /etc/security/limits.conf
 * soft memlock unlimited
